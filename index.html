@@ -610,7 +610,7 @@ nav::-webkit-scrollbar{display:none}
 <div class="topbar">
 <header>
   <div>
-    <div class="logo">Disfruta la Vida <small>· Patrimonio · v132</small></div>
+    <div class="logo">Disfruta la Vida <small>· Patrimonio · v133</small></div>
     <div style="font-size:10px;opacity:.5;margin-top:2px" id="hdr-date"></div>
   </div>
   <div class="hdr-right">
@@ -2542,6 +2542,9 @@ function save(){
     localStorage.setItem('dlv_brokerflows',JSON.stringify(brokerFlows));
     localStorage.setItem('dlv_reembolsos',JSON.stringify(reembolsos));
     localStorage.setItem('dlv_personal',JSON.stringify(personal));
+    // v133 · Cuándo cambiaron por última vez los datos de ESTE aparato. Sirve
+    // para avisar si vas a restaurar encima un archivo más viejo que ellos.
+    localStorage.setItem('dlv_lastchange',new Date().toISOString());
     _saveFailed=false;
   }catch(e){
     console.warn('save error',e);
@@ -2571,7 +2574,14 @@ function exportData(){
   const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
   const url=URL.createObjectURL(blob);
   const a=document.createElement('a');
-  const today=new Date().toISOString().slice(0,10);
+  // v133 · Antes solo llevaba la fecha: dos copias el mismo día chocaban y el
+  // sistema las renombraba a "-1", con lo que ya no se sabía cuál era la buena.
+  // Con hora y nombre de aparato, el orden alfabético ES el orden cronológico.
+  const _d=new Date(), _p=n=>String(n).padStart(2,'0');
+  const today=_d.getFullYear()+'-'+_p(_d.getMonth()+1)+'-'+_p(_d.getDate())+
+    '_'+_p(_d.getHours())+_p(_d.getMinutes())+
+    '_'+String((typeof syncDeviceName==='function')?syncDeviceName():'')
+        .normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Za-z0-9]/g,'').slice(0,12);
   a.href=url;
   a.download='patrimonio_datos_'+today+'.json';
   document.body.appendChild(a);
@@ -3399,7 +3409,23 @@ function importData(ev){
         ((data.incomeLog||[]).length)+' ingresos · '+((data.transactions||[]).length)+' operaciones'+
         (data._exported?'\nExportado el '+data._exported.slice(0,10):'');
       const ahora='Ahora tienes: '+records.length+' meses · '+expenseLog.length+' gastos · '+incomeLog.length+' ingresos · '+transactions.length+' operaciones';
-      if(!confirm('Esto SUSTITUIRÁ todos tus datos actuales por los del archivo.\n\n'+ahora+'\n'+resumen+'\n\n¿Continuar?')){
+      // v133 · El fallo del método "el archivo de la carpeta manda" es olvidarse
+      // de generarlo al terminar en el otro aparato. Entonces restauras encima
+      // una foto anterior a tu propio trabajo y lo borras sin enterarte. Aquí
+      // se compara la fecha del archivo con la del último cambio local.
+      let _avisoViejo='';
+      try{
+        const _lc=localStorage.getItem('dlv_lastchange'), _fe=data._exported||null;
+        if(_lc&&_fe&&_fe<_lc&&(records.length||expenseLog.length||incomeLog.length)){
+          const _h=Math.round((Date.parse(_lc)-Date.parse(_fe))/36e5);
+          _avisoViejo='\n\n⚠️  OJO: ESTE ARCHIVO ES MÁS ANTIGUO QUE LO QUE TIENES AQUÍ.\n'+
+            'El archivo se generó el '+_fe.slice(0,10)+' y en este aparato hay cambios posteriores'+
+            (_h>0?' ('+(_h<48?_h+' horas':Math.round(_h/24)+' días')+' después)':'')+'.\n'+
+            'Si continúas, perderás lo que hiciste aquí desde entonces.\n'+
+            'Si no estás seguro, cancela y usa «Sincronizar»: junta los dos lados sin borrar nada.';
+        }
+      }catch(e){}
+      if(!confirm('Esto SUSTITUIRÁ todos tus datos actuales por los del archivo.\n\n'+ahora+'\n'+resumen+_avisoViejo+'\n\n¿Continuar?')){
         ev.target.value='';return;
       }
       if(!guardedAction('restaurar copia'+(data._exported?' del '+data._exported.slice(0,10):''))){ev.target.value='';return;}
@@ -3421,6 +3447,9 @@ function importData(ev){
       save();
       renderAll();
       goToCurrentMonth();
+      // El aparato queda con la antigüedad del archivo, no con la de hoy: si no,
+      // el siguiente archivo bueno parecería viejo y avisaría sin motivo.
+      try{ if(data._exported)localStorage.setItem('dlv_lastchange',data._exported); }catch(e){}
       toast('✅ Datos restaurados desde el archivo'+(data._exported?' ('+data._exported.slice(0,10)+')':''));
     }catch(err){
       toast('Error al leer el archivo: '+err.message);
