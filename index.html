@@ -610,7 +610,7 @@ nav::-webkit-scrollbar{display:none}
 <div class="topbar">
 <header>
   <div>
-    <div class="logo">Disfruta la Vida <small>· Patrimonio · v131</small></div>
+    <div class="logo">Disfruta la Vida <small>· Patrimonio · v132</small></div>
     <div style="font-size:10px;opacity:.5;margin-top:2px" id="hdr-date"></div>
   </div>
   <div class="hdr-right">
@@ -655,7 +655,7 @@ nav::-webkit-scrollbar{display:none}
 <!-- ══ DASHBOARD ══════════════════════════════════════════════════════ -->
 <div id="panel-dash" class="panel active">
 
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.625rem;flex-wrap:wrap;gap:.5rem;padding:.625rem .75rem;background:#EBF0FA;border-radius:var(--r-sm)">
+  <div id="backup-card" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.625rem;flex-wrap:wrap;gap:.5rem;padding:.625rem .75rem;background:#EBF0FA;border-radius:var(--r-sm)">
     <div style="font-size:11.5px;color:var(--navy)">
       💾 <strong>Copia de seguridad</strong> <span id="backup-reminder"></span>
     </div>
@@ -13920,6 +13920,232 @@ initLayoutObserver();
   window.addEventListener('scroll',on,{passive:true});
   on();
 })();
+</script>
+<script>
+
+// ════════════════════════════════════════════════════════════════════
+// v132 · ARRASTRAR EL ARCHIVO A LA VENTANA
+// ════════════════════════════════════════════════════════════════════
+// Cuando la app se instala como aplicación (el icono del Dock en el Mac o el
+// de la pantalla de inicio en el iPad) deja de ser una pestaña de Safari y
+// pasa a correr en un contenedor más restringido. Ahí, el truco de siempre
+// para abrir el selector de archivos —un <input type=file> escondido al que
+// se le hace clic desde JavaScript— no abre nada: el botón parece roto.
+//
+// Sin poder elegir archivo no se puede restaurar una copia, y sin restaurar
+// una copia la aplicación instalada nace vacía y no hay forma de llenarla.
+//
+// Aquí van los dos remedios, de menos a más drástico:
+//
+//   1 · Se coloca el propio <input> encima de su botón, transparente. Así el
+//       clic cae sobre el input de verdad y no hace falta clic programático.
+//       Solo se hace en modo aplicación: en Safari normal todo funciona ya y
+//       no hay motivo para tocarlo.
+//   2 · Y, funcione o no lo anterior, se puede soltar el archivo encima de la
+//       ventana. Arrastrar no necesita selector de archivos, así que esto
+//       funciona siempre, en cualquier navegador y en cualquier contenedor.
+//       Al soltarlo se pregunta qué hacer con él, que es lo honesto: un mismo
+//       .json puede ser una restauración, una fusión o una sincronía, y son
+//       tres cosas muy distintas.
+
+function _appSuelta(){
+  try{
+    return (window.matchMedia&&window.matchMedia('(display-mode: standalone)').matches)
+      || navigator.standalone===true;
+  }catch(e){ return false; }
+}
+
+// ─── 1 · El input, encima de su botón ────────────────────────────────
+const _FBX_ESPECIAL={'syncStart()':'sync-file'};
+let _fbxCorriendo=false;
+function fbxFix(){
+  if(!_appSuelta()||_fbxCorriendo)return;
+  _fbxCorriendo=true;
+  try{
+    document.querySelectorAll('button[onclick]').forEach(b=>{
+      if(b.dataset.fbx)return;
+      const oc=b.getAttribute('onclick')||'';
+      let id=null;
+      const m=/getElementById\(['"]([\w-]+)['"]\)\s*\.\s*click\(\)/.exec(oc);
+      if(m)id=m[1];
+      else if(_FBX_ESPECIAL[oc.trim()])id=_FBX_ESPECIAL[oc.trim()];
+      if(!id)return;
+      const inp=document.getElementById(id);
+      if(!inp||inp.type!=='file')return;
+      b.dataset.fbx='1';
+      const wrap=document.createElement('span');
+      wrap.className='fbx-wrap';
+      b.parentNode.insertBefore(wrap,b);
+      wrap.appendChild(b);
+      inp.classList.add('fbx-input');
+      inp.style.display='';
+      wrap.appendChild(inp);
+    });
+  }catch(e){ console.warn('fbx',e); }
+  _fbxCorriendo=false;
+}
+
+// ─── 2 · Soltar el archivo en la ventana ─────────────────────────────
+// Qué se puede hacer con cada tipo de archivo. Se filtra por lo que exista
+// en pantalla: los destinos que viven en fichas que no están montadas no se
+// ofrecen, para no enseñar botones que no llevan a ningún sitio.
+function _dropDestinos(ext,n){
+  const T=[];
+  if(ext==='json'){
+    T.push({id:'import-file', t:'Restaurar (sustituye todo)', pri:true,
+      d:'Borra lo que haya en este aparato y deja exactamente lo del archivo. Es lo que quieres la primera vez, cuando la app está vacía.'});
+    T.push({id:'sync-file', t:'Sincronizar',
+      d:'Compara los dos lados y te enseña qué va a cambiar antes de tocar nada. Es lo que quieres cuando los dos aparatos ya tienen datos.'});
+    T.push({id:'merge-file', t:'Fusionar (solo añade)',
+      d:'Añade lo que te falte y no borra nada. Útil para recuperar cosas de una copia vieja.'});
+    T.push({id:'personal-file', t:'Solo los datos personales',
+      d:'Nómina, pensión y ficha fiscal. No toca ingresos, gastos ni inversiones.'});
+  }else if(ext==='pdf'){
+    T.push({id:'nom-pdf-file', t:'Leer como nómina'+(n>1?'s':''), pri:true,
+      d:'Saca el desglose concepto a concepto: sueldo, trienios, complementos y deducciones.'});
+  }else if(ext==='csv'||ext==='xlsx'||ext==='xls'||ext==='txt'){
+    T.push({id:'bank-file', t:'Extracto del banco', pri:true,
+      d:'Ingresos y gastos. Se clasifica solo lo que puede y no duplica nada si ya lo habías subido.'});
+    T.push({id:'degiro-file', t:'Cartera de DEGIRO',
+      d:'El estado de posición: qué acciones tienes y cuántas.'});
+    T.push({id:'degiro-pf-file', t:'Cartera de DEGIRO', d:''});
+    T.push({id:'dgtx-file', t:'Operaciones de DEGIRO',
+      d:'Compras y ventas, para el coste de adquisición y las plusvalías.'});
+    T.push({id:'nav-file', t:'Histórico de valor liquidativo',
+      d:'Los VL de un fondo, para dibujar su evolución.'});
+    T.push({id:'precios-file', t:'Precios históricos de acciones', d:''});
+  }
+  const vistos=new Set();
+  return T.filter(x=>{
+    const el=document.getElementById(x.id);
+    if(!el||el.type!=='file')return false;
+    if(vistos.has(x.t))return false;
+    vistos.add(x.t); return true;
+  });
+}
+let _dropFiles=null;
+function _dropEntregar(id){
+  const inp=document.getElementById(id), F=_dropFiles;
+  if(!inp||!F||!F.length){toast('No se pudo entregar el archivo');return;}
+  document.getElementById('dlv-modal')?.remove();
+  let ok=false;
+  try{
+    const dt=new DataTransfer();
+    [...F].forEach(f=>dt.items.add(f));
+    inp.files=dt.files;
+    inp.dispatchEvent(new Event('change',{bubbles:true}));
+    ok=true;
+  }catch(e){
+    // Navegadores donde no se puede escribir input.files: se llama al
+    // manejador con un objeto que imita lo justo del evento real.
+    try{
+      const h=inp.getAttribute('onchange');
+      if(h){
+        const falso={target:{files:F,value:''}};
+        new Function('event',h).call(inp,falso);
+        ok=true;
+      }
+    }catch(e2){ console.warn('drop',e2); }
+  }
+  if(!ok)toast('No se pudo entregar el archivo');
+  _dropFiles=null;
+}
+function _dropMenu(files){
+  const F=[...files];
+  if(!F.length)return;
+  const ext=(F[0].name.split('.').pop()||'').toLowerCase();
+  const D=_dropDestinos(ext,F.length);
+  const nombres=F.slice(0,3).map(f=>escapeHtml(f.name)).join(', ')+(F.length>3?' y '+(F.length-3)+' más':'');
+  if(!D.length){
+    showModal('Archivo no reconocido',
+      '<div style="font-size:12.5px;line-height:1.6">No sé qué hacer con <strong>'+nombres+'</strong>. '+
+      'Puedo con copias de seguridad (.json), extractos de banco (.csv o .xlsx) y nóminas en PDF.</div>');
+    return;
+  }
+  _dropFiles=F;
+  let h='<div style="font-size:12.5px;line-height:1.6;margin-bottom:.7rem">Has soltado <strong>'+nombres+'</strong>. '+
+    '¿Qué hago con '+(F.length>1?'ellos':'él')+'?</div>';
+  h+=D.map(x=>'<button type="button" class="btn-sm" style="display:block;width:100%;text-align:left;margin-bottom:.45rem;'+
+      'padding:.5rem .6rem;'+(x.pri?'background:var(--navy);color:#fff;border-color:var(--navy)':'')+'" '+
+      'onclick="_dropEntregar(\''+x.id+'\')">'+
+      '<div style="font-size:12.5px;font-weight:600">'+escapeHtml(x.t)+'</div>'+
+      (x.d?'<div style="font-size:11px;font-weight:400;margin-top:.15rem;opacity:.85;line-height:1.45">'+x.d+'</div>':'')+
+      '</button>').join('');
+  h+='<button type="button" class="btn-sm" style="font-size:11.5px;margin-top:.2rem" '+
+     'onclick="_dropFiles=null;document.getElementById(\'dlv-modal\')?.remove()">Cancelar</button>';
+  showModalWide('📥 Archivo soltado en la ventana',h);
+}
+function _dropPintaHint(on){
+  let el=document.getElementById('drop-hint');
+  if(on){
+    if(el)return;
+    el=document.createElement('div');
+    el.id='drop-hint';
+    el.innerHTML='<div>📥<div style="margin-top:.5rem">Suelta el archivo aquí</div></div>';
+    document.body.appendChild(el);
+  }else if(el)el.remove();
+}
+function initDropZone(){
+  if(window._dropListo)return; window._dropListo=true;
+  const st=document.createElement('style');
+  st.textContent=
+    '.fbx-wrap{position:relative;display:inline-flex}'+
+    '.fbx-input{position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer;z-index:3;font-size:0}'+
+    '.fbx-input::-webkit-file-upload-button{width:100%;height:100%;margin:0;padding:0;border:0;background:transparent;cursor:pointer}'+
+    '#drop-hint{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;'+
+      'background:rgba(11,61,145,.82);color:#fff;font-size:20px;font-weight:600;text-align:center;'+
+      'pointer-events:none;letter-spacing:.01em}'+
+    '#drop-hint>div{border:3px dashed rgba(255,255,255,.7);border-radius:16px;padding:2.2rem 3rem;font-size:44px}'+
+    '#drop-hint>div>div{font-size:17px}';
+  document.head.appendChild(st);
+  let prof=0;
+  const tieneArchivos=e=>{
+    const t=e.dataTransfer&&e.dataTransfer.types;
+    return !!(t&&([...t].indexOf('Files')>=0));
+  };
+  window.addEventListener('dragenter',e=>{
+    if(!tieneArchivos(e))return;
+    e.preventDefault(); prof++; _dropPintaHint(true);
+  });
+  window.addEventListener('dragover',e=>{
+    if(!tieneArchivos(e))return;
+    e.preventDefault(); e.dataTransfer.dropEffect='copy';
+  });
+  window.addEventListener('dragleave',e=>{
+    if(!tieneArchivos(e))return;
+    prof=Math.max(0,prof-1); if(!prof)_dropPintaHint(false);
+  });
+  window.addEventListener('drop',e=>{
+    if(!tieneArchivos(e))return;
+    e.preventDefault(); prof=0; _dropPintaHint(false);
+    const F=e.dataTransfer.files;
+    if(F&&F.length)_dropMenu(F);
+  });
+}
+
+// ─── Aviso en la ficha de copia, solo en modo aplicación ─────────────
+function dropAviso(){
+  if(!_appSuelta())return;
+  const anc=document.getElementById('backup-card')||document.querySelector('#tab-entrada .card');
+  if(!anc||document.getElementById('drop-aviso'))return;
+  const d=document.createElement('div');
+  d.id='drop-aviso';
+  d.style.cssText='flex:0 0 100%;font-size:11px;color:var(--navy);opacity:.85;line-height:1.5;margin-top:.1rem';
+  d.innerHTML='Estás en la app instalada. Si algún botón de archivo no responde al pulsarlo, '+
+    '<strong>arrastra el archivo desde el Finder hasta esta ventana</strong> y te pregunto qué hacer con él.';
+  anc.appendChild(d);
+}
+
+window.addEventListener('load',()=>{
+  try{
+    initDropZone(); fbxFix(); dropAviso();
+    let t=null;
+    new MutationObserver(()=>{
+      clearTimeout(t); t=setTimeout(()=>{fbxFix();dropAviso();},220);
+    }).observe(document.body,{childList:true,subtree:true});
+  }catch(e){ console.warn('v132',e); }
+});
+
 </script>
 </body>
 </html>
