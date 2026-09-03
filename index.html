@@ -610,7 +610,7 @@ nav::-webkit-scrollbar{display:none}
 <div class="topbar">
 <header>
   <div>
-    <div class="logo">Disfruta la Vida <small>· Patrimonio · v133</small></div>
+    <div class="logo">Disfruta la Vida <small>· Patrimonio · v134</small></div>
     <div style="font-size:10px;opacity:.5;margin-top:2px" id="hdr-date"></div>
   </div>
   <div class="hdr-right">
@@ -662,8 +662,6 @@ nav::-webkit-scrollbar{display:none}
     <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
       <button class="btn-sm" onclick="exportData()" style="font-size:11.5px;background:var(--navy);color:#fff;border-color:var(--navy)">⬇ Generar archivo</button>
       <button class="btn-sm" onclick="document.getElementById('import-file').click()" style="font-size:11.5px;color:var(--navy);border-color:var(--navy)">⬆ Restaurar (sustituye)</button>
-      <button class="btn-sm" onclick="document.getElementById('merge-file').click()" style="font-size:11.5px;color:var(--teal);border-color:var(--teal)" title="Añade lo del archivo sin borrar nada. Para mantener dos aparatos al día usa Sincronizar, que sí detecta borrados.">⬃ Fusionar (solo añade)</button>
-      <button class="btn-sm" onclick="exportPersonal()" title="Guarda aparte tus nóminas desglosadas y la serie diaria de cartera" style="font-size:11.5px">🔐 Personales</button>
       <button class="btn-sm" onclick="toggleDark()" id="dark-btn" title="Modo oscuro" style="font-size:11.5px">🌙</button>
       <input type="file" id="import-file" accept=".json,application/json" style="display:none" onchange="importData(event)">
       <input type="file" id="merge-file" accept=".json,application/json" style="display:none" onchange="mergeData(event)">
@@ -684,14 +682,10 @@ nav::-webkit-scrollbar{display:none}
     </div>
     <div id="diag-body" style="display:none;margin-top:.6rem"></div>
   </div>
-  <!-- ══ v95 · SINCRONÍA ENTRE DISPOSITIVOS ═══════════════════════ -->
-  <div class="card" id="sync-card" style="padding:.7rem .85rem;margin-bottom:.75rem">
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;flex-wrap:wrap;margin-bottom:.5rem">
-      <div style="font-size:12px;font-weight:600">🔄 Sincronizar iMac ↔ iPad</div>
-    </div>
-    <div id="sync-body"></div>
-    <input type="file" id="sync-file" accept=".json,application/json" style="display:none" onchange="syncFromInput(event)">
-  </div>
+  <!-- v134 · La ficha de sincronía se retiró: con el método de un solo archivo
+       en la carpeta —restaurar al empezar, generar al terminar— la fusión a tres
+       bandas sobraba y era la parte más difícil de explicar. El motor sigue en el
+       código por si algún día hace falta; lo que se ha quitado es la pantalla. -->
 
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem;flex-wrap:wrap;gap:.5rem">
     <div style="font-size:12px;font-weight:600;color:var(--muted)" id="dash-period-label"></div>
@@ -9948,7 +9942,8 @@ async function syncStart(){
     }catch(e){toast('No se pudo leer el archivo: '+e.message);}
     return;
   }
-  document.getElementById('sync-file').click();
+  const _i=document.getElementById('sync-file');
+  if(_i)_i.click(); else toast('La sincronía a tres bandas ya no está en esta versión');
 }
 function syncFromInput(ev){
   const f=ev.target.files&&ev.target.files[0];
@@ -14023,10 +14018,8 @@ function _dropDestinos(ext,n){
   if(ext==='json'){
     T.push({id:'import-file', t:'Restaurar (sustituye todo)', pri:true,
       d:'Borra lo que haya en este aparato y deja exactamente lo del archivo. Es lo que quieres la primera vez, cuando la app está vacía.'});
-    T.push({id:'sync-file', t:'Sincronizar',
-      d:'Compara los dos lados y te enseña qué va a cambiar antes de tocar nada. Es lo que quieres cuando los dos aparatos ya tienen datos.'});
     T.push({id:'merge-file', t:'Fusionar (solo añade)',
-      d:'Añade lo que te falte y no borra nada. Útil para recuperar cosas de una copia vieja.'});
+      d:'Añade lo que falte y no borra nada. Es el remedio si un día se te olvidó generar el archivo al terminar: fusiona la copia del otro aparato y no pierdes nada de ninguno de los dos.'});
     T.push({id:'personal-file', t:'Solo los datos personales',
       d:'Nómina, pensión y ficha fiscal. No toca ingresos, gastos ni inversiones.'});
   }else if(ext==='pdf'){
@@ -14154,14 +14147,14 @@ function initDropZone(){
 
 // ─── Aviso en la ficha de copia, solo en modo aplicación ─────────────
 function dropAviso(){
-  if(!_appSuelta())return;
   const anc=document.getElementById('backup-card')||document.querySelector('#tab-entrada .card');
   if(!anc||document.getElementById('drop-aviso'))return;
   const d=document.createElement('div');
   d.id='drop-aviso';
   d.style.cssText='flex:0 0 100%;font-size:11px;color:var(--navy);opacity:.85;line-height:1.5;margin-top:.1rem';
-  d.innerHTML='Estás en la app instalada. Si algún botón de archivo no responde al pulsarlo, '+
-    '<strong>arrastra el archivo desde el Finder hasta esta ventana</strong> y te pregunto qué hacer con él.';
+  d.innerHTML='<strong>Al empezar</strong>, restaura el último archivo de tu carpeta. '+
+    '<strong>Al terminar</strong>, genera uno nuevo y déjalo ahí.'+
+    (_appSuelta()?' Si el botón no responde, arrastra el archivo hasta esta ventana.':'');
   anc.appendChild(d);
 }
 
