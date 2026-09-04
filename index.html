@@ -610,7 +610,7 @@ nav::-webkit-scrollbar{display:none}
 <div class="topbar">
 <header>
   <div>
-    <div class="logo">Disfruta la Vida <small>· Patrimonio · v134</small></div>
+    <div class="logo">Disfruta la Vida <small>· Patrimonio · v135</small></div>
     <div style="font-size:10px;opacity:.5;margin-top:2px" id="hdr-date"></div>
   </div>
   <div class="hdr-right">
@@ -6751,9 +6751,11 @@ function setAnScope(s){
   _anScope=s;
   document.querySelectorAll('.an-scope').forEach(b=>b.classList.toggle('active',b.dataset.scope===s));
   // toggle stock-only cards when viewing fondos
-  const stockOnly=['an-disposition','an-evol-chart','an-chart','an-closed','an-open'];
+  // v135 · an-cuadrepos faltaba: la ficha seguía a la vista en la pantalla de
+  // fondos, enseñando acciones, y ahí no se refresca nunca.
+  const stockOnly=['an-disposition','an-evol-chart','an-chart','an-closed','an-open','an-cuadrepos'];
   document.querySelectorAll('#panel-analisis .card').forEach(c=>{
-    const isStockCard=c.querySelector('#an-disposition,#an-evol-chart,#an-chart,#an-closed,#an-open');
+    const isStockCard=c.querySelector('#an-disposition,#an-evol-chart,#an-chart,#an-closed,#an-open,#an-cuadrepos');
     if(isStockCard) c.style.display=(s==='fondos')?'none':'';
   });
   renderAnalisis();
@@ -7420,14 +7422,21 @@ function renderAnalisisEvolution(){
 // se enseñan las tres y se deja que escribas la de DEGIRO: la app despeja cuál
 // de las tres tendría que ser para que salga tu número.
 let _cpOpen=false, _cpMio={};
-function toggleCuadrePos(){_cpOpen=!_cpOpen;renderCuadrePos(_cpUltimas);}
+function toggleCuadrePos(){_cpOpen=!_cpOpen;renderCuadrePos();}
 let _cpUltimas=[];
 function cuadrePosMio(el){
   const v=cuadreNum(el.value);
   if(!isFinite(v))delete _cpMio[el.dataset.id]; else _cpMio[el.dataset.id]=v;
-  renderCuadrePos(_cpUltimas);
+  renderCuadrePos();
 }
 function renderCuadrePos(open){
+  // v135 · Esta ficha se pintaba con la última lista que alguien le hubiera
+  // pasado. Si cambiabas las valoraciones y no se repintaba entera la pestaña
+  // de Análisis, se quedaba con los números viejos mientras las tablas de al
+  // lado ya tenían los nuevos: dos cifras distintas para lo mismo, en la misma
+  // pantalla. Ahora, si no le dan datos frescos, se los busca ella. La fuente
+  // sigue siendo una sola, buildTradeOps(), la misma que usa todo lo demás.
+  if(open==null){ try{ open=buildTradeOps().open; }catch(e){ open=_cpUltimas; } }
   _cpUltimas=open||[];
   const box=document.getElementById('an-cuadrepos'); if(!box)return;
   const O=(_cpUltimas||[]).filter(o=>o.shares>0).slice().sort((a,b)=>(b.value||0)-(a.value||0));
@@ -7441,6 +7450,17 @@ function renderCuadrePos(open){
   let h='<div style="font-size:11.5px;color:var(--muted);margin-bottom:.55rem">'+
     'El resultado de una posición son tres cifras: <strong>títulos × lo que te costó</strong> contra <strong>lo que vale hoy</strong>. '+
     'Si tu bróker te da otro número, una de las tres no coincide. Escribe el resultado que ves en DEGIRO y te digo cuál.</div>';
+  // La fecha de las valoraciones, a la vista: si no es la de hoy, lo que ves
+  // aquí no es lo que ves en el bróker y no hay ningún misterio que resolver.
+  (function(){
+    const F=O.map(o=>o.valDate).filter(Boolean).sort();
+    if(!F.length)return;
+    const ult=F[F.length-1], viejas=O.filter(o=>o.valDate&&o.valDate<ult).length;
+    h+='<div style="font-size:11px;margin-bottom:.55rem;color:'+(ult<todayISO()?'var(--amber)':'var(--teal)')+'">'+
+      'Valorado con los precios del <strong>'+fmtDate(ult)+'</strong>'+
+      (ult<todayISO()?' (no es de hoy: vuelve a importar el Portfolio de DEGIRO para refrescarlo)':'')+
+      (viejas?' · '+viejas+' posición(es) con una valoración anterior a esa fecha':'')+'.</div>';
+  })();
   h+='<div class="tbl-scroll"><table class="detail-table" style="font-size:11.5px">'+
     '<thead><tr><th style="text-align:left">Acción</th><th>Títulos</th><th>Coste</th><th class="cp-x">Precio medio</th>'+
     '<th>Valor hoy</th><th>Resultado</th><th>Tu cifra</th><th style="text-align:left">Qué no cuadra</th></tr></thead><tbody>';
@@ -8671,7 +8691,19 @@ function renderAll(){
   refreshLiveRecord(); // v110 · antes de pintar nada, rehacer la foto del mes en curso
   renderKPIs();renderTable();initCharts();renderImpuestos();renderGastosDashboard();
   renderRentabilidad();renderFiscalCalendar();renderLossComp();
+  // v135 · Análisis no se refrescaba nunca desde aquí. Importabas la cartera de
+  // DEGIRO, se guardaban las valoraciones nuevas, se repintaba el dashboard…
+  // y las tablas de Análisis seguían con las de antes hasta que salías de la
+  // pestaña y volvías a entrar. Se repinta solo si está a la vista, que es
+  // cuando importa y cuando no cuesta nada.
+  if(!_enRenderAnalisis){
+    _enRenderAnalisis=true;
+    try{ if(document.getElementById('panel-analisis')?.classList.contains('active'))renderAnalisis(); }
+    catch(e){ console.warn('analisis',e); }
+    _enRenderAnalisis=false;
+  }
 }
+let _enRenderAnalisis=false;
 
 // On load, point the dashboard at the CURRENT calendar month (today)
 function goToCurrentMonth(){
