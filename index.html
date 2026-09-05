@@ -610,7 +610,7 @@ nav::-webkit-scrollbar{display:none}
 <div class="topbar">
 <header>
   <div>
-    <div class="logo">Disfruta la Vida <small>· Patrimonio · v138</small></div>
+    <div class="logo">Disfruta la Vida <small>· Patrimonio · v140</small></div>
     <div style="font-size:10px;opacity:.5;margin-top:2px" id="hdr-date"></div>
   </div>
   <div class="hdr-right">
@@ -9323,20 +9323,27 @@ function renderSalud(){
   // Así ni falta (el año que no tocó pagar) ni sobra (el año que cayeron dos).
   const IPT=iptNetaMes();
   const irpfAnual=irpfAnualPrevisto();
-  let irpfEnVentana=0;
+  let irpfEnVentana=0; const irpfPagos=[];
   try{ saludRealExpenses().forEach(x=>{
     const k=(x.date||'').slice(0,7);
-    if(k>=d.startWin&&k<=d.endWin&&RE_IRPF_GASTO.test(String(x.name||'')))irpfEnVentana+=Number(x.amt)||0;
+    if(k>=d.startWin&&k<=d.endWin&&esPagoIRPF(x.name)){
+      irpfEnVentana+=Number(x.amt)||0;
+      irpfPagos.push({date:x.date,name:String(x.name||'').slice(0,28),amt:Number(x.amt)||0});
+    }
   }); }catch(e){}
+  irpfPagos.sort((a,b)=>String(a.date).localeCompare(String(b.date)));
   const meses=d.months12||12;
-  const avgTot=meses?((Math.max(0,d.sum12-irpfEnVentana)+irpfAnual)/meses):d.avg12;
+  const gastoBaseMes=meses?(Math.max(0,d.sum12-irpfEnVentana)/meses):d.avg12;
+  const avgTot=gastoBaseMes+(meses?irpfAnual/meses*(meses/12):0);
   const colchon=avgTot>0?d.cash/avgTot:0;
   // Lo que consume patrimonio no es el gasto, es el gasto menos la IPT, que
   // es vitalicia. Si la IPT cubre el gasto, el patrimonio no se toca: la
   // autonomía no es un número de meses, es indefinida.
-  const netoMes=avgTot-IPT.mes;
-  const autonomia=netoMes>0?d.pat/netoMes:Infinity;
-  const autonomiaSinIpt=avgTot>0?d.pat/avgTot:0;
+  // v140 · La autonomía se mide sobre el gasto de VIVIR, sin la declaración:
+  // en ese escenario no hay nómina y la IPT sola no tributa.
+  const AU=autonomiaDetalle(gastoBaseMes,d.cash,d.pat);
+  const autonomia=AU.meses;
+  const autonomiaSinIpt=gastoBaseMes>0?d.pat/gastoBaseMes:0;
   const yoy=d.yoyOk?pctTxt(d.yoyCur,d.yoyPrev):null;
   const y12=d.cmpOk?pctTxt(d.sum12,d.sumPrev12):null;
   // el denominador lleva también su parte de declaración: si no, lo recortable
@@ -9349,16 +9356,17 @@ function renderSalud(){
 
   box.innerHTML=
     kc('Colchón de liquidez',saludMonthsWord(colchon),
-       'cash '+fmt(d.cash)+'€ ÷ '+fmt(avgTot)+'€/mes de gasto'+
-       (irpfAnual>0?' (con la renta: '+fmt(d.avg12)+'€ + '+fmt(irpfAnual/12)+'€)':''),
+       'cash '+fmt(d.cash)+'€ ÷ '+fmt(avgTot)+'€/mes'+
+       (irpfAnual>0?' = '+fmt(gastoBaseMes)+'€ de vida + '+fmt(irpfAnual/12)+'€ de renta':' de gasto'),
        colchon>=6?'teal':(colchon>=3?'amber':'red'))+
     kc('Autonomía total',
        isFinite(autonomia)?saludMonthsWord(autonomia)
          :'<span style="color:var(--teal)">indefinida</span>',
        IPT.hay
          ? (isFinite(autonomia)
-             ? 'patrimonio ÷ ('+fmt(avgTot)+'€ de gasto − '+fmt(IPT.mes)+'€/mes de IPT neta) · sin IPT serían '+saludMonthsWord(autonomiaSinIpt)
-             : 'tu IPT neta ('+fmt(IPT.mes)+'€/mes) cubre el gasto de '+fmt(avgTot)+'€: el patrimonio no se toca')
+             ? fmt(gastoBaseMes)+'€ de vida − '+fmt(IPT.mes)+'€ de IPT = '+fmt(AU.drenaje)+'€/mes'+
+               ' · sin la IPT serían '+saludMonthsWord(autonomiaSinIpt)
+             : 'tu IPT neta ('+fmt(IPT.mes)+'€/mes) cubre el gasto de '+fmt(gastoBaseMes)+'€: el patrimonio no se toca')
          : 'todo el patrimonio al ritmo de gasto actual, sin contar rentabilidad',
        isFinite(autonomia)?'navy':'teal')+
     kc('Desde tu máximo',ddTxt,
@@ -9385,12 +9393,22 @@ function renderSalud(){
     (irpfAnual>0?'El gasto medio incluye la <strong>declaración de la renta</strong> ('+fmt(irpfAnual)+
       '€ al año, '+fmt(irpfAnual/12)+'€/mes): es un pago anual y seguro, y dejarlo fuera alargaba el colchón y '+
       'la autonomía y encogía el peso de lo discrecional. '+
-      (irpfEnVentana>0?'El pago de '+fmt(irpfEnVentana)+'€ que ya cayó dentro de la ventana se descuenta para no contarlo dos veces. ':''):'')+
-    (IPT.hay?'La <strong>autonomía</strong> descuenta tu IPT, que es vitalicia y se cobra pase lo que pase: '+
-      fmt2(IPT.brutoMes)+'€ × '+IPT.pagas+' pagas = '+fmt(IPT.anual)+'€ al año, '+fmt(IPT.mes)+'€/mes. '+
-      (IPT.cuota>0?'Van descontados '+fmt(IPT.cuota)+'€ de IRPF. '
-        :'Sin más ingresos que ella no llega al mínimo que tributa, así que en ese escenario se cobra íntegra. ')+
-      'Solo se consume patrimonio por la diferencia entre el gasto y esa cantidad. '
+      (irpfEnVentana>0?'Dentro de esos meses ya pagaste <strong>'+fmt(irpfEnVentana)+'€</strong> a Hacienda ('+
+        irpfPagos.map(x=>fmtDate(x.date)+' '+escapeHtml(x.name)+' '+fmt(x.amt)+'€').join(' · ')+
+        '), y se descuentan para no contarlos dos veces con la previsión. ':''):'')+
+    (IPT.hay?'<br><br><strong>La autonomía se mide en otro escenario</strong>: el de haber dejado de trabajar. '+
+      'Ahí no hay nómina, así que la declaración de la renta no se repite y NO entra en el gasto; queda solo tu IPT, '+
+      fmt2(IPT.brutoMes)+'€ × '+IPT.pagas+' pagas = '+fmt(IPT.anual)+'€ al año, '+
+      (IPT.cuota>0?'de los que '+fmt(IPT.cuota)+'€ son IRPF, '
+        :'que sola no llega al mínimo que tributa y por eso se cobra íntegra, ')+
+      fmt(IPT.mes)+'€/mes. El patrimonio solo se consume por la diferencia: '+
+      fmt(gastoBaseMes)+'€ − '+fmt(IPT.mes)+'€ = <strong>'+fmt(AU.drenaje)+'€/mes</strong>. '+
+      (AU.deuda>0?'Se descuenta una vez la declaración que ya debes ('+fmt(AU.deuda)+'€): dejar de trabajar en enero no te libra de la del año anterior. ':'')+
+      (AU.mesesInv>0&&AU.g>0.01?'Y se cuenta en dos tramos, porque el dinero no está todo en la cuenta: primero el efectivo, '+
+        'que no tributa ('+saludMonthsWord(AU.mesesCash)+'), y después las inversiones ('+saludMonthsWord(AU.mesesInv)+'), '+
+        'donde hay que vender '+(AU.factor).toFixed(2).replace('.',',')+'€ por cada euro que gastas: el '+
+        Math.round(AU.g*100)+'% de su valor es plusvalía latente y tributa al 19%. ':'')+
+      'Todo esto supone que el patrimonio no renta nada mientras lo gastas: es un suelo, no una previsión. '
       :'La <strong>autonomía</strong> supone gastar el patrimonio sin que rente nada: es un suelo, no una previsión.')+
     '</div>';
 }
@@ -9473,8 +9491,71 @@ function irpfAnualPrevisto(){
   }catch(e){}
   return 0;
 }
-// Un pago de la renta ya hecho, para no contarlo dos veces con la previsión
-const RE_IRPF_GASTO=/irpf|declaraci|renta 20|\baeat\b|hacienda|modelo\s*100/i;
+// ── Reconocer un pago de la renta ya hecho ───────────────────────────
+// Hace falta para no contarlo dos veces junto a la previsión. Y no es trivial:
+// el cargo de la AEAT no dice "IRPF" por ninguna parte, se llama "AGENCIA
+// ESTATAL DE LA ADMINISTRACION TRIBUTAR", y el segundo plazo de noviembre
+// aparece como "TRIBUTO" seguido de un número de referencia. La primera
+// versión no pillaba ninguno de los dos y sumaba la previsión encima de lo ya
+// pagado: el gasto medio salía inflado.
+// La segunda lista es igual de necesaria: el IBI y la basura los cobra "SUMA
+// GESTION TRIBUTARIA", que también lleva la palabra tributaria y no tiene nada
+// que ver con la renta. Esos son gastos recurrentes de verdad y se quedan.
+const RE_IRPF_GASTO=/agencia\s+estatal|administraci[oó]n\s+tributaria|\baeat\b|\bhacienda\b|\birpf\b|declaraci[oó]n|modelo\s*100|renta\s*20\d\d|\btributo\s+\d/i;
+const RE_NO_IRPF=/suma\s+gesti|\bibi\b|basura|vado|catastro|circulaci|\bitv\b|\btasa\b|multa|\bdgt\b|diputaci|ayuntamiento/i;
+function esPagoIRPF(nombre){
+  const n=String(nombre||'');
+  return RE_IRPF_GASTO.test(n)&&!RE_NO_IRPF.test(n);
+}
+
+
+// ── La autonomía, contada como se vive de verdad ─────────────────────
+// v140 · Sergio lo vio antes que yo: si la autonomía supone dejar de trabajar,
+// la declaración de la renta que la app tiene prevista NO pinta nada ahí. Esa
+// previsión está construida sobre su nómina, y en ese escenario no hay nómina.
+// La IPT sola, 8.849 € al año, no llega al mínimo que tributa: cero IRPF.
+//
+// Pero cero del todo tampoco. Quedan dos cosas:
+//
+//   · La declaración del último año trabajado, que se debe igual aunque dejes
+//     de trabajar en enero. Se descuenta UNA vez del patrimonio, como la deuda
+//     que es, en vez de arrastrarla todos los meses.
+//   · El IRPF de lo que hay que vender para comer. El dinero no está todo en
+//     la cuenta: para sacar 1.000 € de un fondo con plusvalía hay que vender
+//     más de 1.000 €, porque una parte se la queda Hacienda. Por eso se cuenta
+//     en dos tramos: primero el efectivo, que no tributa, y después las
+//     inversiones, que sí.
+function autonomiaDetalle(gastoVidaMes,cash,pat){
+  const IPT=iptNetaMes();
+  const drenaje=Math.max(0,(Number(gastoVidaMes)||0)-IPT.mes);
+  const deuda=irpfAnualPrevisto();                 // la última declaración, se debe igual
+  const inv=Math.max(0,(Number(pat)||0)-(Number(cash)||0));
+  // Qué parte del valor de tus inversiones es plusvalía latente: es lo único
+  // que tributa al vender. Las pérdidas no suman aquí (compensan, no pagan).
+  let valor=0, ganancia=0;
+  try{
+    (cfg.funds||[]).forEach(f=>{
+      const v=Number((getFundVLInfo(f.id)||{}).amount)||0;
+      const c=Number(getFundInvested(f.id))||0;
+      if(v>0){ valor+=v; ganancia+=Math.max(0,v-c); }
+    });
+  }catch(e){}
+  try{
+    (buildTradeOps().open||[]).forEach(o=>{
+      const v=Number(o.value)||0;
+      if(v>0){ valor+=v; ganancia+=Math.max(0,v-(Number(o.invested)||0)); }
+    });
+  }catch(e){}
+  const g=valor>0?Math.min(1,ganancia/valor):0;
+  const tipo=0.19;                                  // primer tramo de la base del ahorro
+  const factor=1/Math.max(0.5,1-g*tipo);            // hay que vender esto por cada euro que gastas
+  if(drenaje<=0)return {infinita:true,drenaje:0,ipt:IPT,deuda,g,factor,mesesCash:0,mesesInv:0,meses:Infinity};
+  const cashUtil=Math.max(0,(Number(cash)||0)-deuda);
+  const mesesCash=cashUtil/drenaje;
+  const mesesInv=inv>0?inv/(drenaje*factor):0;
+  return {infinita:false,drenaje,ipt:IPT,deuda,g,factor,valorInv:inv,
+    mesesCash,mesesInv,meses:mesesCash+mesesInv};
+}
 
 // ════════════════════════════════════════════
 // v94 · RECATEGORIZACIÓN EN BLOQUE DE GASTOS "OTRO"
