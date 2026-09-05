@@ -610,7 +610,7 @@ nav::-webkit-scrollbar{display:none}
 <div class="topbar">
 <header>
   <div>
-    <div class="logo">Disfruta la Vida <small>· Patrimonio · v135</small></div>
+    <div class="logo">Disfruta la Vida <small>· Patrimonio · v137</small></div>
     <div style="font-size:10px;opacity:.5;margin-top:2px" id="hdr-date"></div>
   </div>
   <div class="hdr-right">
@@ -898,13 +898,11 @@ nav::-webkit-scrollbar{display:none}
       </div>
     </div>
     <div style="display:flex;gap:.5rem;flex-wrap:wrap">
-      <button type="button" class="btn-sm" style="background:var(--navy);color:#fff;border-color:var(--navy);font-size:11.5px" onclick="document.getElementById('bank-file').click()">⬇ Importar CSV banco</button>
-      <button type="button" class="btn-sm" style="background:var(--navy);color:#fff;border-color:var(--navy);font-size:11.5px" onclick="degiroStart(false)">📥 Actualizar desde DEGIRO</button>
-      <input type="file" id="degiro-pf-file" accept=".csv,text/csv" style="display:none" onchange="handleDegiroPortfolio(event)">
+      <button type="button" class="btn-sm" style="background:var(--navy);color:#fff;border-color:var(--navy);font-size:11.5px" onclick="document.getElementById('bank-file').click()">⬇ Importar extracto del banco</button>
       <button type="button" class="btn-sm" style="background:var(--teal);color:#fff;border-color:var(--teal);font-size:11.5px" onclick="reclassifyAllExpenses()">🔄 Reclasificar todos los gastos</button>
       <button type="button" class="btn-sm" style="color:#fff;background:var(--teal);border-color:var(--teal);font-size:11.5px" onclick="document.getElementById('nom-pdf-file').click()">📄 Subir nóminas PDF</button>
       <input type="file" id="nom-pdf-file" accept="application/pdf,.pdf" multiple style="display:none" onchange="handleNominaPdfs(event)">
-      <input type="file" id="bank-file" accept=".csv,.xlsx,.xls,text/csv" style="display:none" onchange="importBankCsv(event)">
+      <input type="file" id="bank-file" accept=".csv,.txt,.tsv,.xls,.xlsx,.xlsm,.ods,.htm,.html,text/csv,text/plain,text/html,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" style="display:none" onchange="importBankCsv(event)">
     </div>
   </div>
 </div>
@@ -1096,8 +1094,6 @@ nav::-webkit-scrollbar{display:none}
   <div class="fsec-title">
     Acciones — operaciones
     <div style="display:flex;gap:.375rem;flex-wrap:wrap">
-      <button type="button" class="btn-xs" style="background:var(--navy);color:#fff;border-color:var(--navy)"
-        onclick="degiroStart(false)">📥 Actualizar desde DEGIRO</button>
       <button type="button" class="btn-xs" style="color:var(--teal);border-color:var(--teal)"
         onclick="openStockOp('buy')">+ Compra</button>
       <button type="button" class="btn-xs" style="color:var(--red);border-color:var(--red)"
@@ -2819,30 +2815,93 @@ function parseNum(s){
   }
   return parseFloat(s); // dot-decimal or integer
 }
+// ════════════════════════════════════════════════════════════════════
+// v136 · EL EXTRACTO DEL BANCO, VENGA COMO VENGA
+// ════════════════════════════════════════════════════════════════════
+// Bankinter llama .xls a un archivo que muchas veces no es un Excel sino una
+// tabla de HTML con otro nombre. La versión anterior decidía por la extensión
+// y le pedía a la librería de Excel que leyera algo que no lo era, así que no
+// había manera: o lo convertías tú a CSV o no entraba.
+//
+// Ahora no se mira el nombre del archivo, se miran sus primeros bytes, que es
+// lo único que no miente:
+//
+//   "PK"            → un .xlsx (por dentro es un zip)
+//   D0 CF 11 E0     → un .xls de los de verdad (formato OLE de Microsoft)
+//   <table…>        → una página web disfrazada: se lee la tabla y ya está
+//   cualquier otra  → texto suelto: CSV, punto y coma, o tabulaciones
+//
+// Y como los bancos españoles siguen mandando acentos en ISO-8859-1, si el
+// texto sale con caracteres rotos se vuelve a decodificar en Windows-1252.
+function bankTexto(buf){
+  const dec=et=>{try{return new TextDecoder(et,{fatal:false}).decode(buf);}catch(e){return null;}};
+  let t=dec('utf-8');
+  if(t==null||t.indexOf('\uFFFD')>=0){ const l=dec('windows-1252')||dec('iso-8859-1'); if(l)t=l; }
+  return String(t||'').replace(/^\uFEFF/,'');
+}
+function bankFilasHtml(txt){
+  const doc=new DOMParser().parseFromString(txt,'text/html');
+  const tablas=[...doc.querySelectorAll('table')];
+  if(!tablas.length)throw new Error('el archivo es una página web pero no trae ninguna tabla');
+  // con tablas anidadas, la buena es siempre la que más filas tiene
+  const t=tablas.slice().sort((a,b)=>b.rows.length-a.rows.length)[0];
+  return [...t.rows].map(tr=>[...tr.cells].map(td=>
+    String(td.textContent||'').replace(/\u00a0/g,' ').replace(/\s+/g,' ').trim()));
+}
+function bankFilasTexto(txt){
+  const L=txt.replace(/\r/g,'').split('\n').filter(l=>l.trim());
+  if(!L.length)throw new Error('el archivo está vacío');
+  // el separador es el que más aparece en las primeras líneas, no el de la
+  // primera: los extractos traen un encabezado suelto antes de la tabla
+  const muestra=L.slice(0,25);
+  const cuenta=c=>muestra.reduce((n,l)=>n+(l.split(c).length-1),0);
+  const delim=[';',',','\t'].map(c=>({c,n:cuenta(c)})).sort((a,b)=>b.n-a.n)[0];
+  if(!delim.n)throw new Error('no encuentro columnas: ni punto y coma, ni comas, ni tabulaciones');
+  return L.map(l=>parseCsvLineD(l,delim.c));
+}
+function bankFilasExcel(buf){
+  if(typeof XLSX==='undefined')throw new Error('no se pudo cargar el lector de Excel');
+  const wb=XLSX.read(buf,{type:'array',cellDates:true});
+  // la hoja buena es la que tiene más filas, no necesariamente la primera
+  let mejor=null;
+  wb.SheetNames.forEach(n=>{
+    const f=XLSX.utils.sheet_to_json(wb.Sheets[n],{header:1,raw:true,defval:''});
+    if(!mejor||f.length>mejor.length)mejor=f;
+  });
+  const p=n=>String(n).padStart(2,'0');
+  // todo a texto: processBankRows recorta y compara cadenas, y una celda de
+  // fecha o un número le harían saltar
+  return (mejor||[]).map(r=>(r||[]).map(c=>{
+    if(c==null)return '';
+    if(c instanceof Date&&!isNaN(c))return c.getFullYear()+'-'+p(c.getMonth()+1)+'-'+p(c.getDate());
+    return String(c);
+  }));
+}
+function bankFilas(buf){
+  const zip = buf[0]===0x50&&buf[1]===0x4B;                                    // PK
+  const ole = buf[0]===0xD0&&buf[1]===0xCF&&buf[2]===0x11&&buf[3]===0xE0;      // .xls real
+  if(zip||ole)return bankFilasExcel(buf);
+  const txt=bankTexto(buf);
+  if(/<\s*table/i.test(txt))return bankFilasHtml(txt);
+  return bankFilasTexto(txt);
+}
 function importBankCsv(ev){
   const file=ev.target.files&&ev.target.files[0];
   if(!file)return;
-  const isXlsx=/\.(xlsx|xls)$/i.test(file.name);
   const reader=new FileReader();
   reader.onload=function(e){
     try{
-      let rows;
-      if(isXlsx){
-        if(typeof XLSX==='undefined'){toast('No se pudo cargar el lector de Excel. Convierte a CSV.');ev.target.value='';return;}
-        const wb=XLSX.read(new Uint8Array(e.target.result),{type:'array',cellDates:true});
-        const ws=wb.Sheets[wb.SheetNames[0]];
-        rows=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:''});
-      } else {
-        let text=e.target.result.replace(/\r/g,'');
-        const first=text.split('\n')[0];
-        const delim=(first.split(';').length>first.split(',').length)?';':',';
-        rows=text.split('\n').filter(l=>l.trim()).map(l=>parseCsvLineD(l,delim));
-      }
-      processBankRows(rows);
-    }catch(err){toast('Error importando: '+err.message);}
+      const filas=bankFilas(new Uint8Array(e.target.result));
+      if(!filas.length)throw new Error('no he encontrado ninguna fila');
+      processBankRows(filas);
+    }catch(err){
+      toast('No pude leer el extracto: '+err.message);
+      console.warn('extracto',err);
+    }
     ev.target.value='';
   };
-  if(isXlsx) reader.readAsArrayBuffer(file); else reader.readAsText(file);
+  reader.onerror=function(){toast('No se pudo abrir el archivo');ev.target.value='';};
+  reader.readAsArrayBuffer(file);
 }
 
 // ════════════════════════════════════════════
@@ -10328,7 +10387,10 @@ async function degiroStart(forzarElegir){
     }catch(e){toast('No se pudo leer: '+e.message);}
     return;
   }
-  document.getElementById('degiro-pf-file').click();
+  // v136 · El selector duplicado que vivía junto al botón del extracto se
+  // retiró; el bueno es el de la ficha de acciones.
+  const _i=document.getElementById('degiro-file')||document.getElementById('degiro-pf-file');
+  if(_i)_i.click(); else toast('No encuentro el selector de archivo de DEGIRO');
 }
 function handleDegiroPortfolio(ev){
   const f=(ev.target.files||[])[0]; ev.target.value='';
@@ -14057,12 +14119,11 @@ function _dropDestinos(ext,n){
   }else if(ext==='pdf'){
     T.push({id:'nom-pdf-file', t:'Leer como nómina'+(n>1?'s':''), pri:true,
       d:'Saca el desglose concepto a concepto: sueldo, trienios, complementos y deducciones.'});
-  }else if(ext==='csv'||ext==='xlsx'||ext==='xls'||ext==='txt'){
+  }else if(['csv','txt','tsv','xls','xlsx','xlsm','ods','htm','html'].indexOf(ext)>=0){
     T.push({id:'bank-file', t:'Extracto del banco', pri:true,
-      d:'Ingresos y gastos. Se clasifica solo lo que puede y no duplica nada si ya lo habías subido.'});
+      d:'Ingresos y gastos. Vale el CSV y vale el Excel del banco tal cual te lo da, sin convertir nada. Se clasifica solo lo que puede y no duplica nada si ya lo habías subido.'});
     T.push({id:'degiro-file', t:'Cartera de DEGIRO',
       d:'El estado de posición: qué acciones tienes y cuántas.'});
-    T.push({id:'degiro-pf-file', t:'Cartera de DEGIRO', d:''});
     T.push({id:'dgtx-file', t:'Operaciones de DEGIRO',
       d:'Compras y ventas, para el coste de adquisición y las plusvalías.'});
     T.push({id:'nav-file', t:'Histórico de valor liquidativo',
