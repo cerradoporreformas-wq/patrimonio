@@ -610,7 +610,7 @@ nav::-webkit-scrollbar{display:none}
 <div class="topbar">
 <header>
   <div>
-    <div class="logo">Disfruta la Vida <small>· Patrimonio · v137</small></div>
+    <div class="logo">Disfruta la Vida <small>· Patrimonio · v138</small></div>
     <div style="font-size:10px;opacity:.5;margin-top:2px" id="hdr-date"></div>
   </div>
   <div class="hdr-right">
@@ -8484,17 +8484,32 @@ function runConsulta(){
   const ahorro=totInc-totExp;
 
   const ING_CAT={nomina:'Nómina',ipt:'IPT/Pensión',dividendo:'Dividendo',rend:'Rendimiento',extra:'Extraordinario',otro2:'Otro'};
-  const card=(l,v,c)=>'<div class="vista-sum-card"><div class="vista-sum-lbl">'+l+'</div><div class="vista-sum-val" style="color:'+c+'">'+fmt(v)+'€</div></div>';
+  const card=(l,v,c,sub)=>'<div class="vista-sum-card"><div class="vista-sum-lbl">'+l+'</div><div class="vista-sum-val" style="color:'+c+'">'+fmt(v)+'€</div>'+
+    (sub?'<div style="font-size:10px;color:var(--muted);margin-top:.2rem;line-height:1.4">'+sub+'</div>':'')+'</div>';
 
   const listRows=(arr,fmtRow)=>arr.length?arr.map(fmtRow).join(''):'<div class="vista-row"><span class="lbl" style="color:var(--faint)">Ninguno en el rango</span></div>';
 
   const CR=(typeof crecimientoPeriodo==='function')?crecimientoPeriodo(from,to):null;
+  // v138 · Lo que vendes con ganancia no es todo tuyo: nadie retiene al vender,
+  // pero el IRPF del ahorro se debe desde ese mismo día y se paga en la
+  // declaración del año siguiente. Aquí va ya descontado.
+  const PV=(typeof plusvaliasNetas==='function')
+    ? plusvaliasNetas(stkOps.filter(t=>t.type==='sell'))
+    : {bruto:realizedPL,irpf:0,neto:realizedPL,tipo:0};
   let html='<div class="vista-summary-grid">'+
     card('Ingresos',totInc,'var(--teal)')+
     card('Gastos',totExp,'var(--red)')+
     card('Ahorro (ing−gas)',ahorro,ahorro>=0?'var(--navy)':'var(--red)')+
     card('Aportaciones fondos',totAport,'var(--purple)')+
-    (stkOps.some(t=>t.type==='sell')?card('Plusvalías realizadas al vender',realizedPL,realizedPL>=0?'var(--teal)':'var(--red)'):'')+
+    (CR&&CR.fondos?card('Revalorización de fondos',Math.round(CR.fondos.ben),
+        CR.fondos.ben>=0?'var(--purple)':'var(--red)',
+        'lo que han subido solos, sin contar lo que metiste'):'')+
+    (stkOps.some(t=>t.type==='sell')?card('Plusvalías realizadas, ya sin el IRPF',Math.round(PV.neto),
+        PV.neto>=0?'var(--teal)':'var(--red)',
+        PV.irpf>0
+          ? 'bruto '+fmt(Math.round(PV.bruto))+'€ − '+fmt(Math.round(PV.irpf))+'€ de IRPF ('+
+            (PV.tipo*100).toFixed(1).replace('.',',')+'%)'
+          : (PV.bruto<0?'en pérdidas: no pagas y compensan futuras ganancias':'sin IRPF que pagar')):'')+
     (CR?card('Ha crecido tu dinero',CR.total,CR.total>=0?'var(--gold)':'var(--red)'):'')+
   '</div>';
   // qué parte del ahorro no se va a repetir
@@ -8511,6 +8526,8 @@ function runConsulta(){
       'background:var(--surface);border:1px dashed var(--line);border-radius:7px">'+
       '<strong>Ha crecido tu dinero '+sg(CR.total)+'</strong> = ahorro '+sg(CR.aho)+
       ' + plusvalías realizadas al vender acciones '+sg(CR.plus)+
+      (PV.irpf>0?' <span style="color:var(--amber)">(de las que '+fmt(Math.round(PV.irpf))+
+        '€ se los llevará Hacienda: netas son '+sg(PV.neto)+')</span>':'')+
       (CR.fondos?' + revalorización de fondos '+sg(CR.fondos.ben):'')+'.'+
       (CR.fondos&&(CR.fondos.recortado||CR.fondos.desfase)?
         ' <span style="color:var(--amber)">La parte de fondos se mide desde el '+fmtDate(CR.fondos.desdeReal)+
@@ -9301,21 +9318,49 @@ function renderSalud(){
     const p=(a-b)/b*100;
     return {t:(p>=0?'+':'')+p.toFixed(1).replace('.',',')+'%',c:p<=0?'teal':'red'};
   };
-  const colchon=d.avg12>0?d.cash/d.avg12:0;
-  const autonomia=d.avg12>0?d.pat/d.avg12:0;
+  // v138 · El gasto medio, con exactamente un año de declaración dentro: se
+  // descuenta la que hubiera caído en la ventana y se pone la previsión entera.
+  // Así ni falta (el año que no tocó pagar) ni sobra (el año que cayeron dos).
+  const IPT=iptNetaMes();
+  const irpfAnual=irpfAnualPrevisto();
+  let irpfEnVentana=0;
+  try{ saludRealExpenses().forEach(x=>{
+    const k=(x.date||'').slice(0,7);
+    if(k>=d.startWin&&k<=d.endWin&&RE_IRPF_GASTO.test(String(x.name||'')))irpfEnVentana+=Number(x.amt)||0;
+  }); }catch(e){}
+  const meses=d.months12||12;
+  const avgTot=meses?((Math.max(0,d.sum12-irpfEnVentana)+irpfAnual)/meses):d.avg12;
+  const colchon=avgTot>0?d.cash/avgTot:0;
+  // Lo que consume patrimonio no es el gasto, es el gasto menos la IPT, que
+  // es vitalicia. Si la IPT cubre el gasto, el patrimonio no se toca: la
+  // autonomía no es un número de meses, es indefinida.
+  const netoMes=avgTot-IPT.mes;
+  const autonomia=netoMes>0?d.pat/netoMes:Infinity;
+  const autonomiaSinIpt=avgTot>0?d.pat/avgTot:0;
   const yoy=d.yoyOk?pctTxt(d.yoyCur,d.yoyPrev):null;
   const y12=d.cmpOk?pctTxt(d.sum12,d.sumPrev12):null;
-  const discPct=d.totCat>0?d.disc/d.totCat*100:0;
+  // el denominador lleva también su parte de declaración: si no, lo recortable
+  // parece pesar más de lo que pesa
+  const totConIRPF=Math.max(0,d.totCat-irpfEnVentana)+irpfAnual*(meses/12);
+  const discPct=totConIRPF>0?d.disc/totConIRPF*100:0;
   const ddTxt=d.curDD>=-0.001?'en máximos':(d.curDD*100).toFixed(1).replace('.',',')+'%';
   const win=fmtMonth(d.startWin)+' → '+fmtMonth(d.endWin);
   const sinDato='<span style="color:var(--faint);font-size:13px">sin histórico</span>';
 
   box.innerHTML=
     kc('Colchón de liquidez',saludMonthsWord(colchon),
-       'cash '+fmt(d.cash)+'€ ÷ '+fmt(d.avg12)+'€/mes de gasto',
+       'cash '+fmt(d.cash)+'€ ÷ '+fmt(avgTot)+'€/mes de gasto'+
+       (irpfAnual>0?' (con la renta: '+fmt(d.avg12)+'€ + '+fmt(irpfAnual/12)+'€)':''),
        colchon>=6?'teal':(colchon>=3?'amber':'red'))+
-    kc('Autonomía total',saludMonthsWord(autonomia),
-       'todo el patrimonio al ritmo de gasto actual, sin contar rentabilidad','navy')+
+    kc('Autonomía total',
+       isFinite(autonomia)?saludMonthsWord(autonomia)
+         :'<span style="color:var(--teal)">indefinida</span>',
+       IPT.hay
+         ? (isFinite(autonomia)
+             ? 'patrimonio ÷ ('+fmt(avgTot)+'€ de gasto − '+fmt(IPT.mes)+'€/mes de IPT neta) · sin IPT serían '+saludMonthsWord(autonomiaSinIpt)
+             : 'tu IPT neta ('+fmt(IPT.mes)+'€/mes) cubre el gasto de '+fmt(avgTot)+'€: el patrimonio no se toca')
+         : 'todo el patrimonio al ritmo de gasto actual, sin contar rentabilidad',
+       isFinite(autonomia)?'navy':'teal')+
     kc('Desde tu máximo',ddTxt,
        'máximo '+fmt(d.peak)+'€'+(d.peakYM?' ('+d.peakYM+')':''),
        d.curDD>=-0.001?'teal':(d.curDD>-0.1?'amber':'red'))+
@@ -9328,7 +9373,7 @@ function renderSalud(){
           :(d.yoyPrevKey?fmtMonth(d.yoyPrevKey)+' sólo tiene '+d.cntPrev+' movimientos frente a '+d.cntCur+': no comparable':''),
        yoy?yoy.c:'')+
     kc('Gasto discrecional',Math.round(discPct)+'%',
-       fmt(d.disc/Math.max(1,d.months12))+'€/mes de '+fmt(d.avg12)+'€ · lo recortable','purple');
+       fmt(d.disc/Math.max(1,meses))+'€/mes de '+fmt(totConIRPF/Math.max(1,meses))+'€ · lo recortable','purple');
 
   if(note)note.innerHTML='<div style="font-size:11.5px;color:var(--muted);margin-top:.5rem;line-height:1.55">'+
     '<strong>Cómo se calcula:</strong> el gasto medio son los <strong>'+d.months12+' últimos meses cerrados</strong> ('+win+'); '+
@@ -9337,9 +9382,99 @@ function renderSalud(){
     (!d.cmpOk||!d.yoyOk?'Las comparaciones interanuales aparecerán cuando haya un año completo de movimientos importados por detrás (los tuyos empiezan en '+fmtMonth(d.covStart||d.startWin)+'): comparar contra meses sin datos daría subidas enormes que no son reales. ':'')+
     '<strong>Discrecional</strong> = '+[...CAT_DISCRECIONAL].map(c=>CAT_LABELS[c]||c).join(', ')+'. '+
     (d.worstYM?'Tu peor caída desde máximos fue del <strong>'+(d.worst*100).toFixed(1).replace('.',',')+'%</strong> en '+d.worstYM+'. ':'')+
-    'La <strong>autonomía</strong> supone gastar el patrimonio sin que rente nada: es un suelo, no una previsión.'+
+    (irpfAnual>0?'El gasto medio incluye la <strong>declaración de la renta</strong> ('+fmt(irpfAnual)+
+      '€ al año, '+fmt(irpfAnual/12)+'€/mes): es un pago anual y seguro, y dejarlo fuera alargaba el colchón y '+
+      'la autonomía y encogía el peso de lo discrecional. '+
+      (irpfEnVentana>0?'El pago de '+fmt(irpfEnVentana)+'€ que ya cayó dentro de la ventana se descuenta para no contarlo dos veces. ':''):'')+
+    (IPT.hay?'La <strong>autonomía</strong> descuenta tu IPT, que es vitalicia y se cobra pase lo que pase: '+
+      fmt2(IPT.brutoMes)+'€ × '+IPT.pagas+' pagas = '+fmt(IPT.anual)+'€ al año, '+fmt(IPT.mes)+'€/mes. '+
+      (IPT.cuota>0?'Van descontados '+fmt(IPT.cuota)+'€ de IRPF. '
+        :'Sin más ingresos que ella no llega al mínimo que tributa, así que en ese escenario se cobra íntegra. ')+
+      'Solo se consume patrimonio por la diferencia entre el gasto y esa cantidad. '
+      :'La <strong>autonomía</strong> supone gastar el patrimonio sin que rente nada: es un suelo, no una previsión.')+
     '</div>';
 }
+
+
+// ════════════════════════════════════════════════════════════════════
+// v138 · LO QUE HACIENDA SE LLEVA, DENTRO DE LAS CUENTAS
+// ════════════════════════════════════════════════════════════════════
+// Tres números de la app se estaban contando en bruto y no lo son:
+//
+//   · Las plusvalías realizadas. Vendes con 5.000 € de ganancia y no son
+//     5.000 € tuyos: nadie te retiene al vender, pero el 19-21% lo debes
+//     desde ese mismo día. Enseñarlo en bruto es enseñar dinero prestado.
+//   · El gasto medio, que ignoraba la declaración de la renta. Es un pago
+//     anual, seguro y de los grandes: dejarlo fuera hace que el colchón y
+//     la autonomía salgan más largos de lo que son, y que el porcentaje de
+//     gasto discrecional salga más alto, porque el denominador va corto.
+//   · La autonomía, que suponía cero ingresos. Falso en tu caso: la IPT es
+//     vitalicia y se cobra pase lo que pase. Lo que consume patrimonio no
+//     es el gasto, es el gasto MENOS la IPT.
+
+// ── El IRPF de unas plusvalías, medido en el margen ──────────────────
+// El tipo no es una constante: depende de dónde caiga la ganancia dentro de
+// tu base del ahorro, donde ya están los intereses y los dividendos del año.
+// Por eso se calcula como diferencia: lo que pagarías con ella menos lo que
+// pagarías sin ella.
+function irpfDePlusvalias(anio,ganancia){
+  if(!(ganancia>0))return 0;
+  let otros=0;
+  try{ const K=fiscalCapMob(Number(anio)); otros=Math.max(0,Number(K&&K.total)||0); }catch(e){}
+  return Math.max(0,calcIRPFGain(otros+ganancia)-calcIRPFGain(otros));
+}
+// Las ventas de un periodo, año por año: cada año fiscal tiene su propia
+// base del ahorro y las pérdidas de un año no bajan el tipo de otro.
+function plusvaliasNetas(ventas){
+  const porAnio={};
+  (ventas||[]).forEach(t=>{
+    const a=String(t.date||'').slice(0,4); if(!a)return;
+    porAnio[a]=(porAnio[a]||0)+(Number(t.gainLoss)||0);
+  });
+  let bruto=0,irpf=0;
+  Object.keys(porAnio).forEach(a=>{ bruto+=porAnio[a]; irpf+=irpfDePlusvalias(a,porAnio[a]); });
+  return {bruto,irpf,neto:bruto-irpf,porAnio,
+    tipo:bruto>0?irpf/bruto:0};
+}
+
+// ── La IPT, neta y por meses ─────────────────────────────────────────
+// Tributa (no está exenta: solo lo están la absoluta y la gran invalidez),
+// así que lo que de verdad entra en casa es el bruto menos su IRPF. Y se
+// calcula sobre la IPT sola, que es lo que quedaría si dejaras de trabajar.
+function iptNetaMes(){
+  const vacio={anual:0,neta:0,mes:0,cuota:0,hay:false};
+  try{
+    const c=pensionCfg(); const mes=Number(c.iptMes)||0;
+    if(!(mes>0))return vacio;
+    const pagas=(typeof iptNumPagas==='function')?iptNumPagas():(Number(c.iptPagas)||14);
+    const anual=mes*pagas;
+    let edad=55;
+    if(c.nacimientoFecha){
+      const e=Math.floor((Date.now()-Date.parse(c.nacimientoFecha))/(365.25*864e5));
+      if(isFinite(e)&&e>0&&e<110)edad=e;
+    }
+    const F=irpfCalc(anual,edad,{ccaa:c.ccaa,discapacidad:c.discapacidad,asistencia:c.asistencia});
+    return {anual,neta:F.neto,mes:F.neto/12,cuota:F.cuota,pagas,brutoMes:mes,hay:true};
+  }catch(e){ return vacio; }
+}
+
+// ── La declaración del año que viene, como gasto ─────────────────────
+function irpfAnualPrevisto(){
+  try{
+    const P=(typeof fiscalPrevisiones==='function'?fiscalPrevisiones():[])
+      .filter(x=>/declaraci|irpf|renta/i.test(String(x.concepto||'')));
+    // Ojo con coger la primera por fecha: la más próxima suele ser el segundo
+    // plazo del año pasado, que es solo el 40% de aquella declaración. Lo que
+    // se busca aquí es lo que cuesta un año entero, así que fuera los plazos
+    // y, de lo que quede, la cifra mayor.
+    const enteras=P.filter(x=>!/plazo/i.test(String(x.concepto||'')));
+    const L=(enteras.length?enteras:P).map(x=>Math.max(0,Number(x.importe)||0));
+    if(L.length)return Math.max.apply(null,L);
+  }catch(e){}
+  return 0;
+}
+// Un pago de la renta ya hecho, para no contarlo dos veces con la previsión
+const RE_IRPF_GASTO=/irpf|declaraci|renta 20|\baeat\b|hacienda|modelo\s*100/i;
 
 // ════════════════════════════════════════════
 // v94 · RECATEGORIZACIÓN EN BLOQUE DE GASTOS "OTRO"
