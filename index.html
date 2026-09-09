@@ -610,7 +610,7 @@ nav::-webkit-scrollbar{display:none}
 <div class="topbar">
 <header>
   <div>
-    <div class="logo">Disfruta la Vida <small>· Patrimonio · v140</small></div>
+    <div class="logo">Disfruta la Vida <small>· Patrimonio · v141</small></div>
     <div style="font-size:10px;opacity:.5;margin-top:2px" id="hdr-date"></div>
   </div>
   <div class="hdr-right">
@@ -902,7 +902,7 @@ nav::-webkit-scrollbar{display:none}
       <button type="button" class="btn-sm" style="background:var(--teal);color:#fff;border-color:var(--teal);font-size:11.5px" onclick="reclassifyAllExpenses()">🔄 Reclasificar todos los gastos</button>
       <button type="button" class="btn-sm" style="color:#fff;background:var(--teal);border-color:var(--teal);font-size:11.5px" onclick="document.getElementById('nom-pdf-file').click()">📄 Subir nóminas PDF</button>
       <input type="file" id="nom-pdf-file" accept="application/pdf,.pdf" multiple style="display:none" onchange="handleNominaPdfs(event)">
-      <input type="file" id="bank-file" accept=".csv,.txt,.tsv,.xls,.xlsx,.xlsm,.ods,.htm,.html,text/csv,text/plain,text/html,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" style="display:none" onchange="importBankCsv(event)">
+      <input type="file" id="bank-file" accept=".csv,.txt,.tsv,.xls,.xlsx,.xlsm,.ods,.htm,.html,.pdf,application/pdf,text/csv,text/plain,text/html,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" style="display:none" onchange="importBankCsv(event)">
     </div>
   </div>
 </div>
@@ -2739,7 +2739,7 @@ const BANK_INC_RULES=[
   [/dividend/i,'dividendo'],
   [/ints|interes|interest|rendimiento/i,'rend'],
 ];
-const BANK_SKIP=/sergio ?bravo|sergiobravo|payout to transit|cash reward|buy trade|sell trade|\boperar\b|azvalor|magallanes|cobas|v\.m\.dia|transf o \/serg|trans inm\/|trf\. sergio|liq\. propia cta/i;
+const BANK_SKIP=/sergio ?bravo|sergiobravo|payout to transit|cash reward|buy trade|sell trade|\boperar\b|azvalor|magallanes|cobas|v\.m\.dia|transf o \/serg|trans inm\/|trf\. sergio|liq\. propia cta|outgoing transfer|incoming transfer/i;
 function slugCat(label){
   let s=label.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'');
   return 'c_'+(s||'cat')+'_'+Math.random().toString(36).slice(2,6);
@@ -2885,17 +2885,129 @@ function bankFilas(buf){
   if(/<\s*table/i.test(txt))return bankFilasHtml(txt);
   return bankFilasTexto(txt);
 }
+// ════════════════════════════════════════════════════════════════════
+// v141 · EL EXTRACTO DE TRADE REPUBLIC, QUE VIENE EN PDF
+// ════════════════════════════════════════════════════════════════════
+// Trade Republic no da CSV ni Excel: da un PDF. El importador no leía PDFs y
+// por eso no había manera de subirlo. La app ya sabe leer PDFs —lo hace con
+// las nóminas—, así que aquí se reutiliza el mismo lector.
+//
+// El PDF tiene una trampa: cada movimiento ocupa TRES renglones, porque la
+// fecha se parte en dos ("08 sept" arriba, "2026" abajo) y el tipo también
+// ("Transacción con" / "tarjeta"). En medio va la línea con el concepto y los
+// importes. Así que no se lee renglón a renglón, se buscan tríos.
+//
+// Y hay otra trampa peor: el importe y el saldo salen como dos números
+// seguidos, sin decir cuál es entrada y cuál salida. Adivinarlo por la
+// columna sería frágil. Lo que no falla es el SALDO: si baja, fue un gasto;
+// si sube, un ingreso. La magnitud se toma del importe y el signo del saldo.
+const TR_MESES={ene:1,feb:2,mar:3,abr:4,may:5,jun:6,jul:7,ago:8,sep:9,sept:9,oct:10,nov:11,dic:12,
+  jan:1,apr:4,aug:8,dec:12};
+// Con \b a los lados a propósito: sin el de la derecha, «Interés» se comía la
+// primera parte de «Interest payment» y el concepto quedaba en «t payment».
+const TR_TIPOS=/\b(?:transacci[oó]n con\s*tarjeta|transacci[oó]n con|tarjeta|inter[eé]s|transferencia|recompensa|comisi[oó]n|dividendo|recarga|reembolso)\b/gi;
+const TR_INGRESO=/inter[eé]s|recompensa|dividendo|abono|ingreso|incoming/i;
+
+function trEsExtracto(L){
+  return L.some(x=>/TRANSACCIONES DE CUENTA/i.test(x))
+      || (L.some(x=>/trade republic/i.test(x))&&L.some(x=>/SALIDA DE|ENTRADA DE/i.test(x)));
+}
+// Todos los importes de una línea, en orden. El último siempre es el saldo.
+function trImportes(s){
+  const m=String(s||'').match(/-?\d{1,3}(?:\.\d{3})*,\d{2}\s*€/g);
+  return m?m.map(x=>parseNum(x.replace('€','').trim())):[];
+}
+function trExtractoFilas(lines){
+  const L=(lines||[]).map(x=>String(x||'').replace(/ /g,' ').replace(/\s+/g,' ').trim());
+  if(!trEsExtracto(L))return null;
+  // el saldo de partida sale del resumen de arriba: sin él, el primer
+  // movimiento no tendría con qué comparar y no sabríamos su signo
+  let saldoPrev=null;
+  const resumen=L.find(x=>/^cuenta corriente\b/i.test(x));
+  if(resumen){ const n=trImportes(resumen); if(n.length)saldoPrev=n[0]; }
+
+  const MES='(?:ene|feb|mar|abr|may|jun|jul|ago|sept|sep|oct|nov|dic|jan|apr|aug|dec)';
+  const reDia=new RegExp('^(\\d{1,2})\\s+('+MES+')\\.?\\s*(.*)$','i');
+  const reAnio=/^(\d{4})\b\s*(.*)$/;
+  const filas=[['Fecha','Tipo','Descripción','Entrada de dinero','Salida de dinero','Saldo']];
+  const p2=n=>String(n).padStart(2,'0');
+  const esp=v=>Math.abs(v).toFixed(2).replace('.',',');
+
+  let i=0;
+  while(i<L.length){
+    const m=reDia.exec(L[i]);
+    if(!m){ i++; continue; }
+    const mes=TR_MESES[String(m[2]).toLowerCase()];
+    if(!mes){ i++; continue; }
+    const extra1=m[3]||'';
+    // la línea de los números, en los tres renglones siguientes
+    let j=-1, nums=null;
+    for(let k=i+1;k<Math.min(i+4,L.length);k++){
+      const n=trImportes(L[k]);
+      if(n.length>=1){ j=k; nums=n; break; }
+    }
+    if(j<0){ i++; continue; }
+    // y el año, justo después
+    let anio=null, extra2='';
+    for(let k=j+1;k<Math.min(j+3,L.length);k++){
+      const a=reAnio.exec(L[k]);
+      if(a){ anio=a[1]; extra2=a[2]||''; break; }
+    }
+    if(!anio){ i=j+1; continue; }
+
+    const saldo=nums[nums.length-1];
+    const explicito=nums.length>=2?Math.abs(nums[nums.length-2]):null;
+    // el concepto es la línea de los números sin los números
+    let desc=L[j].replace(/-?\d{1,3}(?:\.\d{3})*,\d{2}\s*€/g,'').trim();
+    const tipoTxt=(extra1+' '+desc+' '+extra2);
+    const tipo=(tipoTxt.match(TR_TIPOS)||[]).join(' ').replace(/\s+/g,' ').trim();
+    desc=desc.replace(TR_TIPOS,'').replace(/\s+/g,' ').trim();
+    if(desc.length<3) desc=(extra1+' '+extra2).replace(TR_TIPOS,'').replace(/\s+/g,' ').trim();
+    if(!desc) desc=tipo||'Movimiento';
+
+    let signo=0;
+    if(saldoPrev!=null&&isFinite(saldo)) signo=(saldo>saldoPrev)?1:((saldo<saldoPrev)?-1:0);
+    if(!signo) signo=TR_INGRESO.test(tipoTxt)?1:-1;
+    const imp=(explicito!=null?explicito:Math.abs(saldo-(saldoPrev==null?saldo:saldoPrev)));
+    saldoPrev=saldo;
+    if(!(imp>0)){ i=j+1; continue; }
+
+    filas.push([p2(m[1])+'/'+p2(mes)+'/'+anio, tipo, desc,
+      signo>0?esp(imp):'', signo<0?esp(imp):'',
+      isFinite(saldo)?esp(saldo):'']);
+    i=j+1;
+  }
+  return filas.length>1?filas:null;
+}
+// El PDF, por el mismo lector que ya usan las nóminas
+async function bankFilasPdf(file){
+  await loadPdfJs();
+  const lines=await extractPdfLines(file);
+  const F=trExtractoFilas(lines);
+  if(!F)throw new Error('es un PDF pero no reconozco el formato. De momento solo sé leer el extracto de Trade Republic; '+
+    'si es de otro banco, pide el CSV o el Excel');
+  return F;
+}
+
 function importBankCsv(ev){
   const file=ev.target.files&&ev.target.files[0];
   if(!file)return;
   const reader=new FileReader();
-  reader.onload=function(e){
+  reader.onload=async function(e){
     try{
-      const filas=bankFilas(new Uint8Array(e.target.result));
-      if(!filas.length)throw new Error('no he encontrado ninguna fila');
+      const buf=new Uint8Array(e.target.result);
+      // v141 · "%PDF" al principio: hay que pasar por el lector de PDF, que es
+      // asíncrono y se descarga la primera vez que se usa.
+      const esPdf=buf[0]===0x25&&buf[1]===0x50&&buf[2]===0x44&&buf[3]===0x46;
+      if(esPdf)toast('Leyendo el PDF…');
+      const filas=esPdf?await bankFilasPdf(file):bankFilas(buf);
+      if(!filas||!filas.length)throw new Error('no he encontrado ninguna fila');
       processBankRows(filas);
     }catch(err){
-      toast('No pude leer el extracto: '+err.message);
+      const off=/offline|cargar/i.test(String(err&&err.message));
+      alert(off
+        ? 'Para leer un PDF hace falta cargar el lector la primera vez, y ahora mismo no hay conexión.\n\nConéctate a internet y vuelve a intentarlo: después ya funciona sin conexión.'
+        : 'No pude leer el extracto: '+(err&&err.message||err));
       console.warn('extracto',err);
     }
     ev.target.value='';
@@ -14335,6 +14447,8 @@ function _dropDestinos(ext,n){
   }else if(ext==='pdf'){
     T.push({id:'nom-pdf-file', t:'Leer como nómina'+(n>1?'s':''), pri:true,
       d:'Saca el desglose concepto a concepto: sueldo, trienios, complementos y deducciones.'});
+    T.push({id:'bank-file', t:'Extracto del banco',
+      d:'El extracto de Trade Republic viene en PDF: se leen los movimientos, se clasifican y se apunta el saldo final.'});
   }else if(['csv','txt','tsv','xls','xlsx','xlsm','ods','htm','html'].indexOf(ext)>=0){
     T.push({id:'bank-file', t:'Extracto del banco', pri:true,
       d:'Ingresos y gastos. Vale el CSV y vale el Excel del banco tal cual te lo da, sin convertir nada. Se clasifica solo lo que puede y no duplica nada si ya lo habías subido.'});
