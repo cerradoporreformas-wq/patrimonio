@@ -610,7 +610,7 @@ nav::-webkit-scrollbar{display:none}
 <div class="topbar">
 <header>
   <div>
-    <div class="logo">Disfruta la Vida <small>· Patrimonio · v141</small></div>
+    <div class="logo">Disfruta la Vida <small>· Patrimonio · v142</small></div>
     <div style="font-size:10px;opacity:.5;margin-top:2px" id="hdr-date"></div>
   </div>
   <div class="hdr-right">
@@ -909,7 +909,7 @@ nav::-webkit-scrollbar{display:none}
 
 <!-- ══ v97 · DEGIRO ═════════════════════════════════════════════════ -->
 <div class="card" id="degiro-card">
-  <div class="card-hdr"><div class="card-title">📥 Posiciones de DEGIRO</div></div>
+  <div class="card-hdr"><div class="card-title">📥 Posiciones del bróker (DEGIRO · XTB)</div></div>
   <div id="degiro-body"></div>
   <div style="border-top:1px solid var(--line);margin-top:.7rem;padding-top:.6rem">
     <div style="font-size:12px;font-weight:700;margin-bottom:.3rem">📄 Transacciones (compras y ventas)</div>
@@ -1098,12 +1098,12 @@ nav::-webkit-scrollbar{display:none}
         onclick="openStockOp('buy')">+ Compra</button>
       <button type="button" class="btn-xs" style="color:var(--red);border-color:var(--red)"
         onclick="openStockOp('sell')">− Venta</button>
-      <input type="file" id="degiro-file" accept=".csv,text/csv" style="display:none" onchange="handleDegiroPortfolio(event)">
+      <input type="file" id="degiro-file" accept=".csv,.xlsx,.xls,.zip,text/csv,application/zip,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" style="display:none" onchange="handleDegiroPortfolio(event)">
     </div>
   </div>
   <p style="font-size:11px;color:var(--muted);margin-bottom:.625rem">
     Registra cada operación con su fecha. Las posiciones en vigor aparecen automáticamente en el Dashboard.
-    <br><strong style="color:var(--navy)">Actualizar desde DEGIRO</strong>: sube el CSV "Portfolio" y actualiza de golpe el valor de tus acciones y la liquidez. Empareja por ISIN, te enseña qué va a cambiar antes de tocar nada, y fecha la valoración con la del archivo (no con la de hoy).
+    <br><strong style="color:var(--navy)">Importar cartera del bróker</strong>: vale el CSV "Portfolio" de DEGIRO y vale el extracto de XTB (el .zip tal cual, o el .xlsx de dentro). Actualiza de golpe el valor de tus acciones y la liquidez del bróker; empareja por ISIN (o por nombre, en XTB, que no da ISIN), te enseña qué va a cambiar antes de tocar nada, y fecha la valoración con la del archivo, no con la de hoy.
   </p>
 
   <!-- OPEN POSITIONS: always-visible summary + collapsible detail -->
@@ -2980,10 +2980,15 @@ function trExtractoFilas(lines){
   return filas.length>1?filas:null;
 }
 // El PDF, por el mismo lector que ya usan las nóminas
+// v142 · isTR de más abajo mira las columnas del CSV de Trade Republic, que el
+// PDF no tiene: sin esta marca, el saldo de TR se ofrecía por defecto a la
+// cuenta del otro banco y bastaba con darle a Enter para meterlo donde no era.
+let _bankTR=false;
 async function bankFilasPdf(file){
   await loadPdfJs();
   const lines=await extractPdfLines(file);
   const F=trExtractoFilas(lines);
+  if(F)_bankTR=true;
   if(!F)throw new Error('es un PDF pero no reconozco el formato. De momento solo sé leer el extracto de Trade Republic; '+
     'si es de otro banco, pide el CSV o el Excel');
   return F;
@@ -2996,6 +3001,7 @@ function importBankCsv(ev){
   reader.onload=async function(e){
     try{
       const buf=new Uint8Array(e.target.result);
+      _bankTR=false;
       // v141 · "%PDF" al principio: hay que pasar por el lector de PDF, que es
       // asíncrono y se descarga la primera vez que se usa.
       const esPdf=buf[0]===0x25&&buf[1]===0x50&&buf[2]===0x44&&buf[3]===0x46;
@@ -3191,7 +3197,7 @@ function processBankRows(rows){
             : 'No he sabido leer las fechas. Comprueba que la hoja tenga una fila de cabecera con «Fecha», «Descripción» e «Importe».')+
           skipTxt0);
         let tocado=false;
-        try{tocado=bankAplicarSaldo(saldoInfo,isTR);}catch(e){console.warn('saldo',e);}
+        try{tocado=bankAplicarSaldo(saldoInfo,isTR||_bankTR);}catch(e){console.warn('saldo',e);}
         if(tocado){save();renderFormLists();renderAll();}
         return;
       }
@@ -3203,7 +3209,7 @@ function processBankRows(rows){
       if(!confirm(msg)){return;}
       incomeLog.push(...newInc);expenseLog.push(...newExp);
       let tocado=false;
-      try{tocado=bankAplicarSaldo(saldoInfo,isTR);}catch(e){console.warn('saldo',e);}
+      try{tocado=bankAplicarSaldo(saldoInfo,isTR||_bankTR);}catch(e){console.warn('saldo',e);}
       save();renderFormLists();renderTxIngList();renderGastosList();renderAll();renderBankCutoff();
       toast('\u2705 +'+addI+' ingresos \u00b7 +'+addE+' gastos'+(tocado?' \u00b7 liquidez actualizada':'')+' ('+skip+' omitidos)');
 }
@@ -10645,6 +10651,167 @@ function degiroParse(text){
   return {rows:out,porCabecera,head};
 }
 
+// ════════════════════════════════════════════════════════════════════
+// v142 · XTB: EL MISMO BOTÓN, OTRO FORMATO
+// ════════════════════════════════════════════════════════════════════
+// DEGIRO da un CSV con una fila por posición. XTB da un .zip que dentro
+// lleva un .xlsx con TRES hojas: posiciones abiertas, posiciones cerradas
+// y operaciones de caja. No se parecen en nada, así que el importador
+// reconoce el archivo por dentro y decide él solo con cuál de los dos
+// lectores tiene que ir. Para ti es el mismo botón.
+//
+// Y hay una trampa que conviene tener presente: XTB NO da el saldo de la
+// cuenta en ninguna casilla. Lo único que da son los movimientos de caja
+// del periodo que hayas pedido. Sumarlos da el saldo SOLO si el extracto
+// arranca en la apertura de la cuenta; si pides el último mes, la suma es
+// lo que ha entrado y salido ese mes, no lo que tienes. Por eso el importe
+// sale escrito en la vista previa y se puede corregir a mano antes de
+// aplicar nada.
+const XTB_MARCA=/account\s*number|cash\s*operations|open\s*positions|closed\s*positions/i;
+function xtbNum(v){
+  if(typeof v==='number')return isFinite(v)?v:null;
+  return dgNum(v);
+}
+// Las fechas de XTB salen como fecha de Excel (SheetJS ya las convierte a
+// Date). Se pasan a texto con la hora LOCAL, no en UTC: "22:00 del día 8"
+// en UTC es el día 9 aquí, y una valoración fechada un día después se
+// colaría por delante de saldos que sí son de ese día.
+function xtbISO(v){
+  const p2=x=>String(x).padStart(2,'0');
+  if(v instanceof Date&&!isNaN(v))return v.getFullYear()+'-'+p2(v.getMonth()+1)+'-'+p2(v.getDate());
+  const s=String(v==null?'':v).trim();
+  let m=s.match(/^(\d{4})-(\d{2})-(\d{2})/); if(m)return m[0];
+  m=s.match(/^(\d{1,2})[\/.](\d{1,2})[\/.](\d{4})/); if(m)return m[3]+'-'+p2(m[1]*1)+'-'+p2(m[2]*1);
+  const n=Number(s.replace(',','.'));
+  if(isFinite(n)&&n>20000&&n<80000){ const d=new Date(Math.round((n-25569)*86400000));
+    return d.getUTCFullYear()+'-'+p2(d.getUTCMonth()+1)+'-'+p2(d.getUTCDate()); }
+  return null;
+}
+// El .xlsx es un zip; el archivo que descargas de XTB es OTRO zip con el
+// .xlsx dentro. Se prueba primero como Excel y, si no lo es, se abre como
+// zip y se busca la hoja de cálculo que lleve dentro.
+function xtbLibro(buf){
+  if(typeof XLSX==='undefined')throw new Error('no se pudo cargar el lector de Excel');
+  const callado=console.error; console.error=function(){};   // el lector de zip habla de más
+  try{
+    try{ return XLSX.read(buf,{type:'array',cellDates:true}); }catch(e){}
+    const cfb=XLSX.CFB.read(buf,{type:'array'});
+    const i=(cfb.FullPaths||[]).findIndex(p=>/\.(xlsx|xlsm|xls)$/i.test(p));
+    if(i<0)throw new Error('el .zip no trae ninguna hoja de cálculo dentro');
+    return XLSX.read(cfb.FileIndex[i].content,{type:'array',cellDates:true});
+  } finally { console.error=callado; }
+}
+function xtbFilas(wb,nombre){
+  const s=wb.Sheets[nombre];
+  return s?XLSX.utils.sheet_to_json(s,{header:1,raw:true,defval:''}):[];
+}
+// La hoja se busca por su nombre y, si XTB lo hubiera traducido, por el
+// rótulo que lleva escrito en sus primeras filas.
+function xtbHoja(wb,rx){
+  const n=(wb.SheetNames||[]).find(x=>rx.test(x));
+  if(n)return xtbFilas(wb,n);
+  for(const s of (wb.SheetNames||[])){
+    const A=xtbFilas(wb,s);
+    if(A.slice(0,4).some(r=>rx.test(String((r||[])[0]||''))))return A;
+  }
+  return null;
+}
+// La cabecera no está en la fila 1: encima van el número de cuenta y las
+// fechas del informe. Se localiza por las columnas que tiene que tener.
+function xtbCab(A,claves){
+  for(let i=0;i<(A||[]).length;i++){
+    const row=(A[i]||[]).map(c=>String(c||'').trim());
+    if(claves.every(rx=>row.some(c=>rx.test(c))))return i;
+  }
+  return -1;
+}
+function xtbCol(row,rx){ return (row||[]).findIndex(c=>rx.test(String(c||'').trim())); }
+// El valor de una etiqueta de las de arriba ("Date to (UTC)" → la celda de al lado)
+function xtbEtiqueta(A,rx){
+  for(const r of (A||[])){
+    if(rx.test(String((r||[])[0]||'')))return (r||[])[1];
+  }
+  return null;
+}
+
+function xtbParse(buf){
+  let wb;
+  try{ wb=xtbLibro(buf); }catch(e){ return {err:'No pude abrir el archivo: '+(e&&e.message||e)}; }
+  const abiertas=xtbHoja(wb,/open\s*positions|posiciones\s*abiertas/i);
+  const caja    =xtbHoja(wb,/cash\s*operations|operaciones\s*de\s*(caja|efectivo)/i);
+  const cerradas=xtbHoja(wb,/closed\s*positions|posiciones\s*cerradas/i);
+  if(!abiertas&&!caja)return {err:'No parece un extracto de XTB: no encuentro ni «Open Positions» ni «Cash Operations».'};
+
+  // ─── Posiciones abiertas ───
+  const rows=[];
+  if(abiertas){
+    const hi=xtbCab(abiertas,[/instrument|posici/i,/^value$|^valor$/i,/^volume$|^volumen$/i]);
+    if(hi>=0){
+      const H=abiertas[hi];
+      const ci={prod:xtbCol(H,/instrument|posici/i), tick:xtbCol(H,/^ticker$|^s[ií]mbolo$/i),
+                qty:xtbCol(H,/^volume$|^volumen$/i), eur:xtbCol(H,/^value$|^valor$/i),
+                px:xtbCol(H,/current\s*price|precio\s*actual/i)};
+      for(let i=hi+1;i<abiertas.length;i++){
+        const r=abiertas[i]||[];
+        const prod=String(r[ci.prod]||'').trim();
+        if(!prod)continue;
+        if(/^(note|nota|total|totales)$/i.test(prod))continue;
+        const eur=xtbNum(r[ci.eur]);
+        if(eur==null)continue;
+        rows.push({prod,isin:'',qty:ci.qty>=0?xtbNum(r[ci.qty]):null,eur,
+                   tick:ci.tick>=0?String(r[ci.tick]||'').trim():''});
+      }
+    }
+  }
+
+  // ─── Operaciones de caja ───
+  let cash=null; const ops=[]; let nDep=0,nRet=0;
+  if(caja){
+    const hi=xtbCab(caja,[/^type$|^tipo$/i,/^amount$|^importe$/i,/^time$|^fecha$|^hora$/i]);
+    if(hi>=0){
+      const H=caja[hi];
+      const ci={type:xtbCol(H,/^type$|^tipo$/i), time:xtbCol(H,/^time$|^fecha$|^hora$/i),
+                amt:xtbCol(H,/^amount$|^importe$/i), id:xtbCol(H,/^id$/i),
+                com:xtbCol(H,/^comment$|coment/i)};
+      cash=0;
+      for(let i=hi+1;i<caja.length;i++){
+        const r=caja[i]||[];
+        const tipo=String(r[ci.type]||'').trim();
+        if(!tipo)continue;
+        if(/^(total|totales|suma)$/i.test(tipo))continue;      // la fila de la suma no se suma otra vez
+        const amt=xtbNum(r[ci.amt]);
+        if(amt==null)continue;
+        cash+=amt;
+        const o={tipo,fecha:xtbISO(r[ci.time]),amount:amt,
+                 id:String(ci.id>=0?(r[ci.id]||''):'').trim(),
+                 com:String(ci.com>=0?(r[ci.com]||''):'').trim()};
+        if(/deposit|ingreso|dep[oó]sito/i.test(tipo)&&amt>0){o.flujo='aporta';nDep++;}
+        else if(/withdraw|retirada|reintegro/i.test(tipo)&&amt<0){o.flujo='retira';nRet++;}
+        ops.push(o);
+      }
+      cash=Math.round(cash*100)/100;
+    }
+  }
+
+  // ─── Fechas del informe ───
+  const gen  =xtbISO(xtbEtiqueta(abiertas,/data\s*as\s*of|generad/i));
+  const hasta=xtbISO(xtbEtiqueta(caja||abiertas,/date\s*to|hasta/i));
+  const desde=xtbISO(xtbEtiqueta(caja||abiertas,/date\s*from|desde/i));
+  const fOps =ops.map(o=>o.fecha).filter(Boolean).sort();
+  const fecha=gen||hasta||(fOps.length?fOps[fOps.length-1]:null);
+  const cuenta=String(xtbEtiqueta(abiertas||caja,/account\s*number|n[uú]mero\s*de\s*cuenta/i)||'').trim();
+  let nCerr=0;
+  if(cerradas){
+    const hc=xtbCab(cerradas,[/^instrument$|instrumento/i,/profit\s*\/?\s*loss|beneficio/i]);
+    if(hc>=0)for(let i=hc+1;i<cerradas.length;i++){
+      const p=String((cerradas[i]||[])[0]||'').trim();
+      if(p&&!/^(profit|p[eé]rdida|total)/i.test(p))nCerr++;
+    }
+  }
+  return {rows,porCabecera:true,head:[],fuente:'xtb',
+          cash,cashOps:ops,nDep,nRet,desde,hasta,fecha,cuenta,nCerr};
+}
+
 const DG_CASH=/^cash|efectivo|liquidez|geldkonto|compte esp|cash\s*&\s*cash/i;
 function dgLatestBal(stockId){
   return balUltimo('stock',stockId);
@@ -10655,7 +10822,8 @@ function degiroPlan(parsed,date){
   cfg.stocks.forEach(s=>{ if(s.isin) byIsin[String(s.isin).toUpperCase()]=s; });
   const vistos=new Set();
   const upd=[],nuevas=[],qtyDiff=[];
-  let cash=null;
+  // XTB no marca el efectivo como una fila más: viene calculado aparte
+  let cash=(parsed.cash!=null&&isFinite(parsed.cash))?Number(parsed.cash):null;
   parsed.rows.forEach(r=>{
     if(DG_CASH.test(r.prod)){ cash=(cash||0)+r.eur; return; }
     let stk=null,how='';
@@ -10697,7 +10865,10 @@ async function degiroHandle(forzarElegir){
   }
   try{
     const [h]=await window.showOpenFilePicker({
-      types:[{description:'Portfolio de DEGIRO',accept:{'text/csv':['.csv']}}],multiple:false});
+      types:[{description:'Cartera del bróker (DEGIRO o XTB)',
+        accept:{'text/csv':['.csv'],
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':['.xlsx'],
+                'application/zip':['.zip']}}],multiple:false});
     _dgHandle=h; await idbHandle('put',h,'degiro');
     return h;
   }catch(e){return null;}
@@ -10711,7 +10882,7 @@ async function degiroStart(forzarElegir){
     if(!h){toast('No se eligió ningún archivo');return;}
     try{
       const f=await h.getFile();
-      degiroRead(await f.text(),f.name,f.lastModified);
+      brokerFile(new Uint8Array(await f.arrayBuffer()),f.name,f.lastModified);
     }catch(e){toast('No se pudo leer: '+e.message);}
     return;
   }
@@ -10724,20 +10895,58 @@ function handleDegiroPortfolio(ev){
   const f=(ev.target.files||[])[0]; ev.target.value='';
   if(!f)return;
   const r=new FileReader();
-  r.onload=e=>degiroRead(e.target.result,f.name,f.lastModified);
-  r.readAsText(f);
+  r.onload=e=>brokerFile(new Uint8Array(e.target.result),f.name,f.lastModified);
+  r.onerror=()=>toast('No se pudo abrir el archivo');
+  r.readAsArrayBuffer(f);
+}
+// v142 · El bróker se reconoce por los primeros bytes, no por la extensión:
+// un .xlsx y el .zip de XTB empiezan igual ("PK"), y el CSV de DEGIRO es
+// texto plano. Así el mismo botón vale para los dos y no hay que acertar.
+function brokerFile(buf,fname,mtime){
+  try{
+    const zip=buf[0]===0x50&&buf[1]===0x4B;                                  // PK: xlsx o zip
+    const ole=buf[0]===0xD0&&buf[1]===0xCF&&buf[2]===0x11&&buf[3]===0xE0;    // .xls antiguo
+    if(zip||ole) brokerRead(xtbParse(buf),fname,mtime,'xtb');
+    else         brokerRead(degiroParse(bankTexto(buf)),fname,mtime,'degiro');
+  }catch(err){
+    alert('No pude leer el archivo:\n\n'+(err&&err.message||err));
+    console.warn('broker',err);
+  }
 }
 let _dgPending=null;
-function degiroRead(text,fname,mtime){
-  const parsed=degiroParse(text);
-  if(parsed.err){ alert('No pude leer el archivo.\n\n'+parsed.err+'\n\nDebe ser el Portfolio.csv que DEGIRO exporta desde Cartera.'); return; }
+function degiroRead(text,fname,mtime){ brokerRead(degiroParse(text),fname,mtime,'degiro'); }
+function brokerRead(parsed,fname,mtime,fuente){
+  if(!parsed||parsed.err){
+    alert('No pude leer el archivo.\n\n'+((parsed&&parsed.err)||'Formato no reconocido')+'\n\n'+
+      (fuente==='xtb'
+        ? 'De XTB vale el .zip tal cual lo descargas, o el .xlsx que lleva dentro (Historial de la cuenta → Exportar).'
+        : 'De DEGIRO tiene que ser el Portfolio.csv que exporta desde Cartera.'));
+    return;
+  }
   // la fecha por defecto es la del archivo, no la de hoy: si exportaste el
   // viernes y lo importas el domingo, el saldo es del viernes
   let d=todayISO();
   if(mtime){ const t=new Date(mtime); if(!isNaN(t)) d=t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0'); }
-  _dgPending={parsed,fname:fname||'Portfolio.csv',date:d};
+  // XTB fecha el informe por dentro, y eso manda sobre la fecha del archivo
+  if(parsed.fecha) d=parsed.fecha;
+  _dgPending={parsed,fuente:fuente||'degiro',
+    fname:fname||(fuente==='xtb'?'extracto XTB':'Portfolio.csv'),date:d};
   showDegiroPreview();
 }
+function degiroSetCash(v){
+  if(!_dgPending)return;
+  const t=String(v||'').trim();
+  _dgPending.cash=t===''?null:(dgNum(t));
+}
+// El bróker no se adivina a solas: se propone el que encaja con el archivo
+// y se enseña en un desplegable, porque meter la liquidez de XTB en la
+// ficha de DEGIRO es exactamente el tipo de error que no se ve luego.
+function brokerSugerido(fuente){
+  const B=cfg.brokers||[];
+  const rx=fuente==='xtb'?/xtb/i:/degiro/i;
+  return B.find(b=>rx.test(b.name||''))||null;
+}
+function brokerNombreFuente(fuente){ return fuente==='xtb'?'XTB':'DEGIRO'; }
 function degiroSetDate(v){ if(_dgPending){_dgPending.date=v; showDegiroPreview();} }
 
 function showDegiroPreview(){
@@ -10749,9 +10958,12 @@ function showDegiroPreview(){
   const dif=totalNuevo-totalAnt;
   const porIsin=plan.upd.filter(u=>u.how==='ISIN').length;
   const porNombre=plan.upd.filter(u=>u.how==='nombre').length;
+  const esXtb=P.fuente==='xtb';
   let h='';
   h+='<div style="font-size:11.5px;color:var(--muted);margin-bottom:.5rem">'+
+     '<strong style="color:var(--navy)">'+brokerNombreFuente(P.fuente)+'</strong> · '+
      escapeHtml(P.fname)+' · '+plan.upd.length+' posiciones reconocidas'+
+     (esXtb&&P.parsed.desde&&P.parsed.hasta?(' · periodo '+fmtDate(P.parsed.desde)+' → '+fmtDate(P.parsed.hasta)):'')+
      (plan.porCabecera?'':' · <span style="color:var(--amber)">sin cabecera reconocible, leído por posición de columna</span>')+
      '</div>';
   h+='<div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-bottom:.6rem">'+
@@ -10774,7 +10986,9 @@ function showDegiroPreview(){
   if(plan.faltan.length){
     h+='<div style="background:#FFF6E0;border:1px solid #E8C97A;border-radius:6px;padding:.5rem .6rem;font-size:11.5px;color:var(--amber);margin-bottom:.6rem">'+
       '<strong>Tienes abiertas y no salen en el archivo:</strong> '+plan.faltan.map(s=>escapeHtml(s.name)).join(', ')+
-      '. No se tocan. Si las vendiste, anótalo; si están en otro bróker, es normal.</div>';
+      '. No se tocan.'+(P.fuente==='xtb'
+        ? ' Es lo esperable: este extracto es de XTB y esas posiciones están en DEGIRO.'
+        : ' Si las vendiste, anótalo; si están en otro bróker, es normal.')+'</div>';
   }
   if(plan.upd.length){
     h+='<div class="tbl-scroll" style="max-height:200px;overflow:auto;margin-bottom:.6rem"><table class="detail-table" style="font-size:11.5px">'+
@@ -10791,9 +11005,45 @@ function showDegiroPreview(){
     });
     h+='</tbody></table></div>';
   }
-  if(plan.cash!=null){
-    h+='<div style="font-size:11.5px;margin-bottom:.6rem">Efectivo en el bróker: <strong>'+fmt(plan.cash)+'€</strong> (cuenta como liquidez)</div>';
+  // ─── Efectivo y a qué bróker va ───────────────────────────────────
+  if(P.cash===undefined) P.cash=(plan.cash!=null?plan.cash:null);
+  const B=cfg.brokers||[];
+  if(P.brokerSel===undefined){
+    const sug=brokerSugerido(P.fuente);
+    P.brokerSel=sug?sug.id:'__nuevo__';
   }
+  h+='<div style="border:1px solid var(--border);border-radius:6px;padding:.55rem .6rem;margin-bottom:.6rem">'+
+    '<div style="font-size:11.5px;font-weight:600;margin-bottom:.35rem">Liquidez del bróker</div>'+
+    '<div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;font-size:11.5px">'+
+      '<label>Efectivo <input type="text" value="'+(P.cash==null?'':fmt2(P.cash))+'" '+
+        'onchange="degiroSetCash(this.value)" style="width:96px;font-size:11px;padding:1px 5px;text-align:right"> €</label>'+
+      '<label>en <select id="dg-broker" onchange="_dgPending.brokerSel=this.value" style="font-size:11px;padding:1px 5px">'+
+        B.map(b=>'<option value="'+b.id+'"'+(P.brokerSel===b.id?' selected':'')+'>'+escapeHtml(b.name)+'</option>').join('')+
+        '<option value="__nuevo__"'+(P.brokerSel==='__nuevo__'?' selected':'')+'>➕ crear «'+brokerNombreFuente(P.fuente)+'»</option>'+
+        '<option value="">— no tocar la liquidez —</option>'+
+      '</select></label>'+
+    '</div>';
+  if(esXtb){
+    h+='<div style="font-size:10.5px;color:var(--amber);margin-top:.35rem;line-height:1.35">'+
+      '<strong>Ojo con este número.</strong> XTB no publica el saldo de la cuenta en ninguna casilla: esto es la '+
+      '<strong>suma de las '+(P.parsed.cashOps||[]).length+' operaciones de caja</strong> del extracto '+
+      (P.parsed.desde?('('+fmtDate(P.parsed.desde)+' → '+fmtDate(P.parsed.hasta||P.date)+')'):'')+
+      '. Solo coincide con tu saldo real si pediste el extracto <strong>desde la apertura de la cuenta</strong>. '+
+      'Si pediste solo el último mes, corrígelo aquí a mano.</div>';
+    const flu=(P.parsed.cashOps||[]).filter(o=>o.flujo);
+    if(flu.length){
+      h+='<label style="display:block;font-size:11px;margin-top:.4rem">'+
+        '<input type="checkbox" id="dg-flows" checked> Registrar también '+P.parsed.nDep+' ingreso(s)'+
+        (P.parsed.nRet?' y '+P.parsed.nRet+' retirada(s)':'')+' como aportaciones al bróker'+
+        ' <span style="color:var(--faint)">(no se duplican si vuelves a importar)</span></label>';
+    }
+    if(P.parsed.nCerr){
+      h+='<div style="font-size:10.5px;color:var(--muted);margin-top:.3rem">El extracto trae '+P.parsed.nCerr+
+        ' posición(es) cerrada(s). Las compras y ventas <strong>no</strong> se importan de aquí: anótalas con + Compra / − Venta '+
+        'para que el coste de adquisición y la plusvalía salgan bien.</div>';
+    }
+  }
+  h+='</div>';
   if(plan.nuevas.length){
     h+='<div style="border:1px solid var(--border);border-radius:6px;padding:.5rem .6rem;margin-bottom:.6rem">'+
       '<div style="font-size:11.5px;font-weight:600;margin-bottom:.3rem">No las reconozco ('+plan.nuevas.length+')</div>'+
@@ -10808,14 +11058,14 @@ function showDegiroPreview(){
   h+='<div style="display:flex;gap:.5rem;justify-content:flex-end;flex-wrap:wrap">'+
     '<button class="btn-sm" onclick="document.getElementById(\'dlv-modal\').remove()" style="font-size:12px">Cancelar</button>'+
     '<button class="btn-sm" onclick="degiroCommit()" style="font-size:12px;background:var(--navy);color:#fff;border-color:var(--navy)">Aplicar</button></div>';
-  showModalWide('📥 Posiciones de DEGIRO',h);
+  showModalWide('📥 Posiciones de '+brokerNombreFuente(P.fuente),h);
 }
 
 function degiroCommit(){
   const P=_dgPending; if(!P||!P.plan){toast('Nada que aplicar');return;}
   const plan=P.plan, date=P.date;
   const crear=plan.nuevas.filter((r,i)=>document.getElementById('dg-new-'+i)?.checked);
-  if(!guardedAction('importar posiciones DEGIRO de '+date))return;
+  if(!guardedAction('importar posiciones de '+brokerNombreFuente(P.fuente)+' de '+date))return;
   let act=0,nue=0,isins=0;
   const ponerBal=(stockId,amount)=>{
     const i=balanceLog.findIndex(b=>b.refType==='stock'&&b.refId===stockId&&b.date===date);
@@ -10831,17 +11081,40 @@ function degiroCommit(){
     if(r.isin)stk.isin=r.isin;
     cfg.stocks.push(stk); ponerBal(stk.id,r.eur); nue++;
   });
-  if(plan.cash!=null&&cfg.brokers&&cfg.brokers[0]){
-    const bk=cfg.brokers[0];
+  // ─── Liquidez: al bróker que hayas elegido, no siempre al primero ──
+  let bk=null, flujos=0;
+  const sel=(P.brokerSel===undefined?'':P.brokerSel);
+  if(sel==='__nuevo__'){
+    bk={id:'brk_'+Date.now(),name:brokerNombreFuente(P.fuente)};
+    cfg.brokers=cfg.brokers||[]; cfg.brokers.push(bk);
+  } else if(sel){ bk=(cfg.brokers||[]).find(b=>b.id===sel)||null; }
+  const efectivo=(P.cash!=null&&isFinite(P.cash))?Math.round(P.cash*100)/100:null;
+  if(bk&&efectivo!=null){
     const i=balanceLog.findIndex(b=>b.refType==='broker'&&b.refId===bk.id&&b.date===date);
-    if(i>=0) balanceLog[i].amount=plan.cash;
-    else balanceLog.push({id:'bal_pfbrk_'+date.replace(/-/g,''),refType:'broker',refId:bk.id,date,amount:plan.cash,src:'degiro'});
+    if(i>=0) balanceLog[i].amount=efectivo;
+    else balanceLog.push({id:'bal_pfbrk_'+bk.id+'_'+date.replace(/-/g,''),refType:'broker',refId:bk.id,
+      date,amount:efectivo,src:P.fuente});
   }
-  try{localStorage.setItem('dlv_degiro_last',JSON.stringify({at:new Date().toISOString(),date,n:act}));}catch(e){}
+  // Ingresos y retiradas de XTB como aportaciones al bróker. La clave 'ext'
+  // es la del propio movimiento en XTB: reimportar el mismo extracto no los
+  // duplica, y si amplías el periodo solo entran los que faltaban.
+  if(bk&&P.fuente==='xtb'&&document.getElementById('dg-flows')?.checked){
+    if(typeof brokerFlows==='undefined')brokerFlows=[];
+    (P.parsed.cashOps||[]).filter(o=>o.flujo&&o.fecha).forEach((o,k)=>{
+      const key='xtb:'+(o.id||(o.fecha+':'+o.amount));
+      if(brokerFlows.some(f=>f.ext===key))return;
+      brokerFlows.push({id:'bf_x'+Date.now()+'_'+k,date:o.fecha,brokerId:bk.id,
+        type:o.flujo,amount:Math.abs(o.amount),ext:key});
+      flujos++;
+    });
+  }
+  try{localStorage.setItem('dlv_degiro_last',JSON.stringify({at:new Date().toISOString(),date,n:act,
+    fuente:P.fuente,broker:bk?bk.name:null}));}catch(e){}
   _dgPending=null;
-  save(); renderAll(); renderDegiroPanel();
+  save(); renderAll(); renderDegiroPanel(); try{renderStockTxList();}catch(e){}
   document.getElementById('dlv-modal')?.remove();
-  toast('✅ '+act+' posiciones al día'+(nue?' · '+nue+' nuevas':'')+(isins?' · '+isins+' ISIN guardados':'')+' · puedes deshacerlo');
+  toast('✅ '+act+' posiciones al día'+(nue?' · '+nue+' nuevas':'')+(isins?' · '+isins+' ISIN guardados':'')+
+    (bk&&efectivo!=null?' · '+fmt2(efectivo)+'€ en '+bk.name:'')+(flujos?' · '+flujos+' movimiento(s)':'')+' · puedes deshacerlo');
 }
 
 function renderDegiroPanel(){
@@ -10850,15 +11123,16 @@ function renderDegiroPanel(){
   try{last=JSON.parse(localStorage.getItem('dlv_degiro_last')||'null');}catch(e){}
   const conIsin=cfg.stocks.filter(s=>s.isin).length;
   let h='<div style="font-size:11.5px;color:var(--muted);margin-bottom:.45rem">'+
-    (last?'Última actualización: valores del <strong>'+fmtDate(last.date)+'</strong> ('+last.n+' posiciones).'
+    (last?'Última actualización: valores del <strong>'+fmtDate(last.date)+'</strong> ('+last.n+' posiciones'+
+          (last.fuente?', desde '+(last.fuente==='xtb'?'XTB':'DEGIRO'):'')+').'
         :'Todavía no has importado posiciones con esta versión.')+
     ' '+conIsin+' de '+cfg.stocks.length+' acciones tienen ISIN guardado — el emparejamiento por ISIN es el que no se equivoca.</div>';
   h+='<div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">'+
-    '<button type="button" class="btn-sm" onclick="degiroStart(false)" style="font-size:11.5px;background:var(--navy);color:#fff;border-color:var(--navy)">📥 Actualizar desde DEGIRO</button>'+
+    '<button type="button" class="btn-sm" onclick="degiroStart(false)" style="font-size:11.5px;background:var(--navy);color:#fff;border-color:var(--navy)">📥 Importar cartera del bróker</button>'+
     (fsSupported()
       ? '<button type="button" class="btn-sm" onclick="degiroStart(true)" style="font-size:11.5px">Elegir otro archivo</button>'+
         (_dgHandle?'<button type="button" class="btn-sm" onclick="degiroForget()" style="font-size:11.5px">Olvidar</button>'
-                 :'<span style="font-size:10.5px;color:var(--faint)">La primera vez eliges el Portfolio.csv; después basta con el botón.</span>')
+                 :'<span style="font-size:10.5px;color:var(--faint)">La primera vez eliges el archivo; después basta con el botón.</span>')
       : '<span style="font-size:10.5px;color:var(--faint)">Este navegador pedirá el archivo cada vez.</span>')+
     '</div>';
   el.innerHTML=h;
@@ -14449,11 +14723,14 @@ function _dropDestinos(ext,n){
       d:'Saca el desglose concepto a concepto: sueldo, trienios, complementos y deducciones.'});
     T.push({id:'bank-file', t:'Extracto del banco',
       d:'El extracto de Trade Republic viene en PDF: se leen los movimientos, se clasifican y se apunta el saldo final.'});
+  }else if(ext==='zip'){
+    T.push({id:'degiro-file', t:'Extracto de XTB', pri:true,
+      d:'El .zip que descargas de XTB, tal cual: posiciones abiertas y liquidez. Se lee el Excel que lleva dentro.'});
   }else if(['csv','txt','tsv','xls','xlsx','xlsm','ods','htm','html'].indexOf(ext)>=0){
     T.push({id:'bank-file', t:'Extracto del banco', pri:true,
       d:'Ingresos y gastos. Vale el CSV y vale el Excel del banco tal cual te lo da, sin convertir nada. Se clasifica solo lo que puede y no duplica nada si ya lo habías subido.'});
-    T.push({id:'degiro-file', t:'Cartera de DEGIRO',
-      d:'El estado de posición: qué acciones tienes y cuántas.'});
+    T.push({id:'degiro-file', t:'Cartera del bróker (DEGIRO o XTB)',
+      d:'El estado de posición: qué acciones tienes, cuántas y cuánto efectivo queda sin invertir.'});
     T.push({id:'dgtx-file', t:'Operaciones de DEGIRO',
       d:'Compras y ventas, para el coste de adquisición y las plusvalías.'});
     T.push({id:'nav-file', t:'Histórico de valor liquidativo',
