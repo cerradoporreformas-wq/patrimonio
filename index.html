@@ -610,7 +610,7 @@ nav::-webkit-scrollbar{display:none}
 <div class="topbar">
 <header>
   <div>
-    <div class="logo">Disfruta la Vida <small>· Patrimonio · v142</small></div>
+    <div class="logo">Disfruta la Vida <small>· Patrimonio · v143</small></div>
     <div style="font-size:10px;opacity:.5;margin-top:2px" id="hdr-date"></div>
   </div>
   <div class="hdr-right">
@@ -10743,7 +10743,12 @@ function xtbParse(buf){
   if(!abiertas&&!caja)return {err:'No parece un extracto de XTB: no encuentro ni «Open Positions» ni «Cash Operations».'};
 
   // ─── Posiciones abiertas ───
-  const rows=[];
+  // XTB escribe CADA posición dos veces: una fila resumen con el nombre del
+  // instrumento y, debajo, una fila por cada posición abierta cuyo «nombre» es
+  // el número de posición (2804500611). Cogerlas todas contaba la acción dos
+  // veces y creaba una posición fantasma llamada como el número. Manda la fila
+  // resumen; las de número solo se usan si no hubiera resumen.
+  const rows=[]; const crudas=[];
   if(abiertas){
     const hi=xtbCab(abiertas,[/instrument|posici/i,/^value$|^valor$/i,/^volume$|^volumen$/i]);
     if(hi>=0){
@@ -10758,10 +10763,19 @@ function xtbParse(buf){
         if(/^(note|nota|total|totales)$/i.test(prod))continue;
         const eur=xtbNum(r[ci.eur]);
         if(eur==null)continue;
-        rows.push({prod,isin:'',qty:ci.qty>=0?xtbNum(r[ci.qty]):null,eur,
+        crudas.push({prod,isin:'',qty:ci.qty>=0?xtbNum(r[ci.qty]):null,eur,
                    tick:ci.tick>=0?String(r[ci.tick]||'').trim():''});
       }
     }
+    const esNum=x=>/^\d{5,}$/.test(String(x.prod||''));
+    const conNombre=new Set(crudas.filter(x=>!esNum(x)).map(x=>(x.tick||x.prod).toUpperCase()));
+    crudas.forEach(x=>{
+      if(esNum(x)){
+        if(conNombre.has((x.tick||x.prod).toUpperCase()))return;   // ya está la fila resumen
+        x.prod=x.tick||x.prod;                                     // sin resumen, al menos el ticker
+      }
+      rows.push(x);
+    });
   }
 
   // ─── Operaciones de caja ───
@@ -10772,7 +10786,8 @@ function xtbParse(buf){
       const H=caja[hi];
       const ci={type:xtbCol(H,/^type$|^tipo$/i), time:xtbCol(H,/^time$|^fecha$|^hora$/i),
                 amt:xtbCol(H,/^amount$|^importe$/i), id:xtbCol(H,/^id$/i),
-                com:xtbCol(H,/^comment$|coment/i)};
+                com:xtbCol(H,/^comment$|coment/i), instr:xtbCol(H,/^instrument$|instrumento/i),
+                tick:xtbCol(H,/^ticker$|^s[ií]mbolo$/i), pos:xtbCol(H,/position\s*id/i)};
       cash=0;
       for(let i=hi+1;i<caja.length;i++){
         const r=caja[i]||[];
@@ -10784,7 +10799,10 @@ function xtbParse(buf){
         cash+=amt;
         const o={tipo,fecha:xtbISO(r[ci.time]),amount:amt,
                  id:String(ci.id>=0?(r[ci.id]||''):'').trim(),
-                 com:String(ci.com>=0?(r[ci.com]||''):'').trim()};
+                 com:String(ci.com>=0?(r[ci.com]||''):'').trim(),
+                 instr:String(ci.instr>=0?(r[ci.instr]||''):'').trim(),
+                 tick:String(ci.tick>=0?(r[ci.tick]||''):'').trim(),
+                 pos:String(ci.pos>=0?(r[ci.pos]||''):'').trim()};
         if(/deposit|ingreso|dep[oó]sito/i.test(tipo)&&amt>0){o.flujo='aporta';nDep++;}
         else if(/withdraw|retirada|reintegro/i.test(tipo)&&amt<0){o.flujo='retira';nRet++;}
         ops.push(o);
@@ -10792,6 +10810,8 @@ function xtbParse(buf){
       cash=Math.round(cash*100)/100;
     }
   }
+
+  const opsBolsa=xtbOperaciones(ops);
 
   // ─── Fechas del informe ───
   const gen  =xtbISO(xtbEtiqueta(abiertas,/data\s*as\s*of|generad/i));
@@ -10809,7 +10829,70 @@ function xtbParse(buf){
     }
   }
   return {rows,porCabecera:true,head:[],fuente:'xtb',
-          cash,cashOps:ops,nDep,nRet,desde,hasta,fecha,cuenta,nCerr};
+          cash,cashOps:ops,ops:opsBolsa,nDep,nRet,desde,hasta,fecha,cuenta,nCerr};
+}
+
+// ── Las compras y ventas, que XTB mete en la misma hoja de caja ────
+// No hay un archivo aparte como en DEGIRO: la compra de una acción aparece
+// como un apunte de caja negativo cuyo comentario dice lo que se compró
+// ("OPEN BUY 121/121.6545 @ 8.220"). De ahí salen títulos y precio.
+// Una misma compra puede venir partida en dos apuntes —los títulos enteros
+// por un lado y la fracción por otro—, así que se agrupan por número de
+// posición: 121 acciones + 0,6545 acciones son UNA compra de 121,6545.
+const XTB_OPRX=/(OPEN|CLOSE)\s+(BUY|SELL)\s+([\d.,]+)(?:\s*\/\s*([\d.,]+))?\s*@\s*([\d.,]+)/i;
+function xtbOperaciones(ops){
+  const g={}, comis={};
+  (ops||[]).forEach(o=>{
+    if(!o.fecha)return;
+    if(/commission|comisi/i.test(o.tipo)&&o.pos){
+      comis[o.pos]=(comis[o.pos]||0)+Math.abs(o.amount); return;
+    }
+    const m=XTB_OPRX.exec(o.com||'');
+    if(!m)return;
+    const nombre=o.instr||o.tick; if(!nombre)return;
+    const accion=m[1].toUpperCase();
+    const clave=(o.pos||nombre)+'|'+accion+'|'+o.fecha;
+    const G=g[clave]||(g[clave]={date:o.fecha,prod:nombre,tick:o.tick||'',isin:'',
+      tipo:accion==='OPEN'?'buy':'sell',n:0,valEUR:0,costes:0,pos:o.pos||'',
+      orden:'xtb:'+(o.pos||nombre)+':'+accion,precioLocal:xtbNum(m[5])||0});
+    G.n+=xtbNum(m[3])||0;
+    G.valEUR+=Math.abs(o.amount);
+  });
+  const out=Object.values(g).filter(x=>x.n>0&&x.valEUR>0);
+  out.forEach(x=>{ if(x.pos&&comis[x.pos])x.costes=Math.round(comis[x.pos]*100)/100;
+                   x.precio=x.valEUR/x.n; });
+  return out.sort((a,b)=>a.date.localeCompare(b.date));
+}
+// Se AÑADEN, nunca se sustituyen: con dos brókers a la vez, borrar y rehacer
+// las operaciones de una acción (como hace el importador de DEGIRO) se llevaría
+// por delante las del otro. La clave del apunte es la de XTB, así que reimportar
+// el mismo extracto —o uno más largo— no duplica nada.
+function xtbAplicarOps(lista){
+  let creadas=0,acciones=0;
+  (lista||[]).slice().sort((a,b)=>a.date.localeCompare(b.date)).forEach((o,k)=>{
+    if(transactions.some(t=>t.ext===o.orden))return;
+    let s=o.tick?cfg.stocks.find(x=>String(x.tick||'').toUpperCase()===o.tick.toUpperCase()):null;
+    if(!s){
+      const nn=_pfNorm(o.prod);
+      s=cfg.stocks.find(x=>{const cn=_pfNorm(x.name);return cn&&nn&&(nn===cn||nn.startsWith(cn)||cn.startsWith(nn));});
+    }
+    if(!s){
+      s={id:'stk_xtb_'+Date.now()+'_'+k,name:dgTitulo(o.prod),existing:false};
+      if(o.tick)s.tick=o.tick;
+      cfg.stocks.push(s); acciones++;
+    } else if(!s.tick&&o.tick){ s.tick=o.tick; }
+    transactions.push({id:'tx_xtb_'+Date.now().toString(36)+'_'+k,
+      stockId:s.id,stockName:s.name,name:s.name,type:o.tipo,date:o.date,
+      shares:Math.round(o.n*1e6)/1e6,
+      price:Math.round((o.valEUR/o.n)*1e6)/1e6,      // por título y ya en euros
+      costs:Math.round((o.costes||0)*100)/100,
+      total:Math.round(o.valEUR*100)/100,
+      year:parseInt(String(o.date).slice(0,4)),
+      ext:o.orden,src:'xtb'});
+    creadas++;
+  });
+  if(creadas){ try{recomputeAllStockGains();}catch(e){console.warn('fifo',e);} }
+  return {creadas,acciones};
 }
 
 const DG_CASH=/^cash|efectivo|liquidez|geldkonto|compte esp|cash\s*&\s*cash/i;
@@ -10818,8 +10901,9 @@ function dgLatestBal(stockId){
 }
 function degiroPlan(parsed,date){
   const agg=getStockAggregates();
-  const byIsin={};
-  cfg.stocks.forEach(s=>{ if(s.isin) byIsin[String(s.isin).toUpperCase()]=s; });
+  const byIsin={},byTick={};
+  cfg.stocks.forEach(s=>{ if(s.isin) byIsin[String(s.isin).toUpperCase()]=s;
+                          if(s.tick) byTick[String(s.tick).toUpperCase()]=s; });
   const vistos=new Set();
   const upd=[],nuevas=[],qtyDiff=[];
   // XTB no marca el efectivo como una fila más: viene calculado aparte
@@ -10828,6 +10912,8 @@ function degiroPlan(parsed,date){
     if(DG_CASH.test(r.prod)){ cash=(cash||0)+r.eur; return; }
     let stk=null,how='';
     if(r.isin&&byIsin[r.isin]){ stk=byIsin[r.isin]; how='ISIN'; }
+    // XTB no da ISIN: su clave estable es el ticker (ANTIN.FR)
+    if(!stk&&r.tick&&byTick[String(r.tick).toUpperCase()]){ stk=byTick[String(r.tick).toUpperCase()]; how='ticker'; }
     if(!stk){
       const pn=_pfNorm(r.prod);
       stk=cfg.stocks.find(s=>{const cn=_pfNorm(s.name);return cn&&(pn===cn||pn.startsWith(cn)||cn.startsWith(pn));});
@@ -10836,7 +10922,8 @@ function degiroPlan(parsed,date){
     if(!stk){ nuevas.push(r); return; }
     vistos.add(stk.id);
     const prev=dgLatestBal(stk.id);
-    upd.push({stk,row:r,how,prev,ponIsin:(!stk.isin&&r.isin)?r.isin:null});
+    upd.push({stk,row:r,how,prev,ponIsin:(!stk.isin&&r.isin)?r.isin:null,
+              ponTick:(!stk.tick&&r.tick)?r.tick:null});
     const mias=agg[stk.id]?agg[stk.id].totalShares:0;
     if(r.qty!=null&&Math.abs(r.qty-mias)>0.01) qtyDiff.push({stk,degiro:r.qty,mias});
   });
@@ -10956,7 +11043,7 @@ function showDegiroPreview(){
   const totalNuevo=plan.upd.reduce((s,u)=>s+u.row.eur,0);
   const totalAnt=plan.upd.reduce((s,u)=>s+(u.prev?u.prev.amount:0),0);
   const dif=totalNuevo-totalAnt;
-  const porIsin=plan.upd.filter(u=>u.how==='ISIN').length;
+  const porIsin=plan.upd.filter(u=>u.how==='ISIN').length+plan.upd.filter(u=>u.how==='ticker').length;
   const porNombre=plan.upd.filter(u=>u.how==='nombre').length;
   const esXtb=P.fuente==='xtb';
   let h='';
@@ -10973,7 +11060,7 @@ function showDegiroPreview(){
   h+='<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:.7rem">'+
      [['Valor cartera',fmt(totalNuevo)+'€','var(--navy)'],
       ['Cambio',(dif>=0?'+':'')+fmt(dif)+'€',dif>=0?'var(--teal)':'var(--red)'],
-      ['Emparejadas',porIsin+' ISIN · '+porNombre+' nombre','var(--muted)']]
+      ['Emparejadas',porIsin+' ISIN/ticker · '+porNombre+' nombre','var(--muted)']]
      .map(([l,v,c])=>'<div style="background:var(--surface2);border-radius:6px;padding:.45rem .5rem;text-align:center">'+
        '<div style="font-size:14px;font-weight:700;color:'+c+'">'+v+'</div>'+
        '<div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)">'+l+'</div></div>').join('')+'</div>';
@@ -11044,6 +11131,31 @@ function showDegiroPreview(){
     }
   }
   h+='</div>';
+  // ─── Compras y ventas que trae el propio extracto (solo XTB) ──────
+  const opsX=esXtb?(P.parsed.ops||[]):[];
+  if(opsX.length){
+    const yaEstan=opsX.filter(o=>transactions.some(t=>t.ext===o.orden));
+    const faltan=opsX.filter(o=>!transactions.some(t=>t.ext===o.orden));
+    h+='<div style="border:1px solid var(--border);border-radius:6px;padding:.55rem .6rem;margin-bottom:.6rem">'+
+      '<div style="font-size:11.5px;font-weight:600;margin-bottom:.3rem">Compras y ventas en el extracto ('+opsX.length+')</div>';
+    h+='<div class="tbl-scroll" style="max-height:150px;overflow:auto"><table class="detail-table" style="font-size:11px">'+
+      '<thead><tr><th>Fecha</th><th>Op.</th><th>Acción</th><th>Títulos</th><th>Precio</th><th>Total</th></tr></thead><tbody>'+
+      opsX.map(o=>'<tr'+(yaEstan.indexOf(o)>=0?' style="opacity:.5"':'')+'><td>'+fmtDate(o.date)+'</td>'+
+        '<td style="color:'+(o.tipo==='buy'?'var(--teal)':'var(--red)')+'">'+(o.tipo==='buy'?'Compra':'Venta')+'</td>'+
+        '<td>'+escapeHtml(o.prod).slice(0,26)+'</td><td>'+fmt2(o.n)+'</td>'+
+        '<td>'+fmt2(o.valEUR/o.n)+'€</td><td>'+fmt2(o.valEUR)+'€</td></tr>').join('')+
+      '</tbody></table></div>';
+    if(faltan.length){
+      h+='<label style="display:block;font-size:11px;margin-top:.4rem">'+
+        '<input type="checkbox" id="dg-ops" checked> Registrar '+faltan.length+' operación(es) nueva(s)'+
+        ' <span style="color:var(--faint)">(se añaden a las que ya tienes, no las sustituyen)</span></label>'+
+        '<div style="font-size:10.5px;color:var(--muted);margin-top:.3rem">De aquí salen los títulos y el coste de adquisición, '+
+        'que es lo que hace falta para la plusvalía. Si la acción no existe todavía, se crea.</div>';
+    } else {
+      h+='<div style="font-size:10.5px;color:var(--muted);margin-top:.35rem">Ya las tienes todas registradas.</div>';
+    }
+    h+='</div>';
+  }
   if(plan.nuevas.length){
     h+='<div style="border:1px solid var(--border);border-radius:6px;padding:.5rem .6rem;margin-bottom:.6rem">'+
       '<div style="font-size:11.5px;font-weight:600;margin-bottom:.3rem">No las reconozco ('+plan.nuevas.length+')</div>'+
@@ -11063,10 +11175,19 @@ function showDegiroPreview(){
 
 function degiroCommit(){
   const P=_dgPending; if(!P||!P.plan){toast('Nada que aplicar');return;}
-  const plan=P.plan, date=P.date;
-  const crear=plan.nuevas.filter((r,i)=>document.getElementById('dg-new-'+i)?.checked);
+  const date=P.date;
+  // las casillas se leen por NOMBRE, no por posición: si al registrar las
+  // operaciones se crea la acción, la lista de "no las reconozco" cambia
+  const crearNombres=new Set(P.plan.nuevas.filter((r,i)=>document.getElementById('dg-new-'+i)?.checked).map(r=>r.prod));
+  const opsX=(P.fuente==='xtb'?(P.parsed.ops||[]):[]);
+  const hacerOps=opsX.length&&document.getElementById('dg-ops')?.checked;
   if(!guardedAction('importar posiciones de '+brokerNombreFuente(P.fuente)+' de '+date))return;
-  let act=0,nue=0,isins=0;
+  let act=0,nue=0,isins=0,ticks=0,nOps=0,nAccOps=0;
+  // Primero las compras y ventas: crean la acción, y así la valoración de la
+  // hoja de posiciones abiertas ya tiene con qué emparejarse.
+  if(hacerOps){ const r=xtbAplicarOps(opsX); nOps=r.creadas; nAccOps=r.acciones; }
+  const plan=hacerOps?degiroPlan(P.parsed,date):P.plan;
+  const crear=plan.nuevas.filter(r=>crearNombres.has(r.prod));
   const ponerBal=(stockId,amount)=>{
     const i=balanceLog.findIndex(b=>b.refType==='stock'&&b.refId===stockId&&b.date===date);
     if(i>=0) balanceLog[i].amount=amount;
@@ -11074,11 +11195,13 @@ function degiroCommit(){
   };
   plan.upd.forEach(u=>{
     if(u.ponIsin){u.stk.isin=u.ponIsin;isins++;}   // se cura solo: la próxima ya empareja por ISIN
+    if(u.ponTick){u.stk.tick=u.ponTick;ticks++;}   // en XTB el que no falla es el ticker
     ponerBal(u.stk.id,u.row.eur); act++;
   });
   crear.forEach(r=>{
-    const stk={id:'stk_pf_'+Date.now()+'_'+Math.floor(Math.random()*1000),name:r.prod.trim()};
+    const stk={id:'stk_pf_'+Date.now()+'_'+Math.floor(Math.random()*1000),name:dgTitulo(r.prod)};
     if(r.isin)stk.isin=r.isin;
+    if(r.tick)stk.tick=r.tick;
     cfg.stocks.push(stk); ponerBal(stk.id,r.eur); nue++;
   });
   // ─── Liquidez: al bróker que hayas elegido, no siempre al primero ──
@@ -11111,9 +11234,11 @@ function degiroCommit(){
   try{localStorage.setItem('dlv_degiro_last',JSON.stringify({at:new Date().toISOString(),date,n:act,
     fuente:P.fuente,broker:bk?bk.name:null}));}catch(e){}
   _dgPending=null;
-  save(); renderAll(); renderDegiroPanel(); try{renderStockTxList();}catch(e){}
+  save(); renderAll(); renderDegiroPanel();
+  try{renderStockTxList();}catch(e){} try{renderFormLists();}catch(e){} try{renderAnalisis();}catch(e){}
   document.getElementById('dlv-modal')?.remove();
-  toast('✅ '+act+' posiciones al día'+(nue?' · '+nue+' nuevas':'')+(isins?' · '+isins+' ISIN guardados':'')+
+  toast('✅ '+act+' posiciones al día'+(nue+nAccOps?' · '+(nue+nAccOps)+' nuevas':'')+
+    (nOps?' · '+nOps+' operación(es)':'')+(isins?' · '+isins+' ISIN':'')+(ticks?' · '+ticks+' ticker':'')+
     (bk&&efectivo!=null?' · '+fmt2(efectivo)+'€ en '+bk.name:'')+(flujos?' · '+flujos+' movimiento(s)':'')+' · puedes deshacerlo');
 }
 
@@ -12024,7 +12149,7 @@ function dgTxAplicar(cambian){
 // "MAISONS DU MONDE SA" en mayúsculas queda feo en las tablas
 function dgTitulo(s){
   return String(s||'').toLowerCase().replace(/\b([a-záéíóúñ])/g,(m,c)=>c.toUpperCase())
-    .replace(/\b(Sa|Nv|Plc|Inc|Ag|Se|Ltd)\b/g,m=>m.toUpperCase())
+    .replace(/\b(Sa|Sas|Nv|Plc|Inc|Ag|Se|Ltd|Spa|Asa|Oyj|Ab)\b/g,m=>m.toUpperCase())
     .replace(/\s+/g,' ').trim();
 }
 
