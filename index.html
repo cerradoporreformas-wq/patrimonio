@@ -610,7 +610,7 @@ nav::-webkit-scrollbar{display:none}
 <div class="topbar">
 <header>
   <div>
-    <div class="logo">Disfruta la Vida <small>· Patrimonio · v147</small></div>
+    <div class="logo">Disfruta la Vida <small>· Patrimonio · v148</small></div>
     <div style="font-size:10px;opacity:.5;margin-top:2px" id="hdr-date"></div>
   </div>
   <div class="hdr-right">
@@ -1550,9 +1550,14 @@ nav::-webkit-scrollbar{display:none}
   <div id="fund-cards"></div>
   <div class="card">
     <div class="card-hdr"><div class="card-title">Resultado por operación</div>
-      <div style="font-size:11px;color:var(--muted)">P/L de cada operación — cerradas sólidas, abiertas translúcidas</div>
+      <div style="font-size:11px;color:var(--muted)">cerradas sólidas, abiertas translúcidas</div>
+    </div>
+    <div style="display:flex;gap:.4rem;margin-bottom:.5rem">
+      <button type="button" class="btn-xs an-chart-btn active" data-mode="eur" onclick="setAnChartMode('eur')">€ Beneficio</button>
+      <button type="button" class="btn-xs an-chart-btn" data-mode="pct" onclick="setAnChartMode('pct')">% Rentabilidad</button>
     </div>
     <div style="position:relative;height:360px"><canvas id="an-chart"></canvas></div>
+    <div id="an-chart-note" style="font-size:10.5px;color:var(--muted);margin-top:.4rem"></div>
   </div>
   <div class="card">
     <div class="card-hdr"><div class="card-title">Registro de cierres</div></div>
@@ -7895,13 +7900,42 @@ function renderCuadrePos(open){
   markScrollables(box);
 }
 
+// v148 · Dos lecturas del mismo gráfico. En euros ves dónde has ganado dinero
+// de verdad; en porcentaje ves lo bien o mal que ha ido cada operación con
+// independencia de cuánto metiste. Son preguntas distintas y las dos importan:
+// 2.000€ ganados sobre 40.000 es un 5%, y 800€ sobre 1.000 es un 80%. La barra
+// más larga en euros suele ser la peor operación en porcentaje.
+let _anChartMode=(function(){try{return localStorage.getItem('dlv_anchart_mode')||'eur';}catch(e){return 'eur';}})();
+let _anLastOps=null;
+function setAnChartMode(m){
+  _anChartMode=m;
+  try{localStorage.setItem('dlv_anchart_mode',m);}catch(e){}
+  document.querySelectorAll('.an-chart-btn').forEach(b=>b.classList.toggle('active',b.dataset.mode===m));
+  if(_anLastOps)renderAnalisisChart(_anLastOps.closed,_anLastOps.open);
+}
 function renderAnalisisChart(closed,open){
   const cv=document.getElementById('an-chart');
   if(!cv||typeof Chart==='undefined')return;
-  const cc=closed.slice().sort((a,b)=>(a.pnl||0)-(b.pnl||0));
-  const oo=open.slice().sort((a,b)=>(a.pnl||0)-(b.pnl||0));
+  _anLastOps={closed,open};
+  document.querySelectorAll('.an-chart-btn').forEach(b=>b.classList.toggle('active',b.dataset.mode===_anChartMode));
+  const pct=_anChartMode==='pct';
+  // En porcentaje, una operación sin coste registrado no se puede dividir: se
+  // queda fuera del gráfico en vez de pintarse como un cero que no significa
+  // nada, y se dice cuántas son debajo.
+  const usable=o=>!pct||(o.invested>0&&o.pnl!=null);
+  const valor=o=>pct?((o.pnl||0)/o.invested*100):(o.pnl||0);
+  const cc=closed.filter(usable).slice().sort((a,b)=>valor(a)-valor(b));
+  const oo=open.filter(usable).slice().sort((a,b)=>valor(a)-valor(b));
+  const fuera=(closed.length-cc.length)+(open.length-oo.length);
+  const nota=document.getElementById('an-chart-note');
+  if(nota)nota.innerHTML=(pct
+      ? 'Rentabilidad sobre el coste de cada operación. Ojo: un +80% sobre 1.000€ son 800€, y un +5% sobre 40.000€ son 2.000€. Para saber dónde has ganado dinero, mira los euros.'
+      : 'Beneficio en euros de cada operación. Para saber lo bien que ha ido cada una, mira el porcentaje.')+
+    (fuera?' <span style="color:var(--amber)">'+fuera+' operación(es) sin coste registrado quedan fuera de esta vista.</span>':'');
   const labels=[...cc.map(o=>o.name), ...oo.map(o=>o.name+' (abierta)')];
-  const data=[...cc.map(o=>o.pnl||0), ...oo.map(o=>o.pnl||0)];
+  const data=[...cc.map(valor), ...oo.map(valor)];
+  const eur=[...cc.map(o=>o.pnl||0), ...oo.map(o=>o.pnl||0)];
+  const inv=[...cc.map(o=>o.invested||0), ...oo.map(o=>o.invested||0)];
   const colors=data.map((v,i)=> i<cc.length
     ? (v>=0?'#1A7A3A':'#B03020')
     : (v>=0?'rgba(26,122,58,.4)':'rgba(176,48,32,.4)'));
@@ -7920,9 +7954,16 @@ function renderAnalisisChart(closed,open){
     options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,
       plugins:{legend:{display:false},tooltip:{callbacks:{
         title:i=>i[0].label,
-        label:c=>(c.raw>=0?'+':'')+fmt(c.raw)+'€'}}},
+        // el tooltip enseña SIEMPRE las dos caras, estés en el modo que estés
+        label:c=>{
+          const i=c.dataIndex, e=eur[i], v=inv[i];
+          const pe=(e>=0?'+':'')+fmt2(e)+'€';
+          const pp=v>0?((e/v*100>=0?'+':'')+(e/v*100).toFixed(1)+'%'):'—';
+          return pe+'  ·  '+pp+(v>0?'  (coste '+fmt(v)+'€)':'');
+        }}}},
       scales:{
-        x:{grid:{color:dark?'rgba(255,255,255,.08)':'rgba(0,0,0,.05)'},ticks:{color:dark?'#A0AEC0':'#8A97AB',font:{size:10},callback:v=>fmt(v)+'€'}},
+        x:{grid:{color:dark?'rgba(255,255,255,.08)':'rgba(0,0,0,.05)'},ticks:{color:dark?'#A0AEC0':'#8A97AB',font:{size:10},
+           callback:v=>pct?(v.toFixed(0)+'%'):(fmt(v)+'€')}},
         y:{grid:{display:false},ticks:{color:dark?'#A0AEC0':'#5A6A80',font:{size:10.5},
            autoSkip:false,maxRotation:0,
            callback:function(v){const t=this.getLabelForValue(v);return t.length>30?t.slice(0,29)+'…':t;}}}
