@@ -610,7 +610,7 @@ nav::-webkit-scrollbar{display:none}
 <div class="topbar">
 <header>
   <div>
-    <div class="logo">Disfruta la Vida <small>· Patrimonio · v143</small></div>
+    <div class="logo">Disfruta la Vida <small>· Patrimonio · v147</small></div>
     <div style="font-size:10px;opacity:.5;margin-top:2px" id="hdr-date"></div>
   </div>
   <div class="hdr-right">
@@ -1671,7 +1671,7 @@ nav::-webkit-scrollbar{display:none}
     <div class="kpi-grid" id="ah-proj"></div>
     <div style="position:relative;height:280px;margin-top:.6rem"><canvas id="ah-proj-chart"></canvas></div>
     <div style="display:flex;justify-content:space-between;align-items:center;margin-top:.3rem"><span style="font-size:10.5px;color:var(--muted)">🔍 Rueda o pellizca para ampliar · arrastra para desplazar</span><button type="button" class="btn-sm" style="font-size:10.5px;padding:2px 8px" onclick="ahResetZoom('proj')">↺ Reiniciar zoom</button></div>
-    <p style="font-size:11px;color:var(--muted);margin-top:.4rem">Proyección orientativa: asume que mantienes tu ahorro medio mensual y una rentabilidad constante. La realidad varía.</p>
+    <p style="font-size:11px;color:var(--muted);margin-top:.4rem">Proyección orientativa: parte de tu patrimonio de hoy, mantiene tu ahorro medio mensual <strong>hasta que te jubiles</strong> (después el capital sigue solo) y asume una rentabilidad constante. En euros de hoy, sin descontar inflación. La realidad varía.</p>
   </div>
 </div>
 
@@ -1904,7 +1904,10 @@ function recomputeAllStockGains(){
           if(lot.shares<=1e-9)lots.shift();
         }
         t.costBasis=Math.round(cost*100)/100;
-        const proceeds=t.total||0;
+        // v146 · Fiscalmente el valor de transmisión va NETO de los gastos
+        // inherentes a la venta. Antes la comisión no se restaba y la plusvalía
+        // —y con ella la previsión de IRPF— salía inflada.
+        const proceeds=(t.total||0)-(t.costs||0);
         t.gainLoss=Math.round((proceeds-cost)*100)/100;
         if(!t.year&&t.date)t.year=parseInt(t.date.slice(0,4));
       }
@@ -1941,6 +1944,68 @@ function balInfo(refType,refId,fallback){
   return (typeof fallback==='function')?fallback():{amount:0,date:null,source:'none'};
 }
 
+// v146 · Las plusvalías realizadas se calculan por FIFO (que es lo que exige
+// Hacienda) pero el P/L latente se calculaba prorrateando el coste medio. Con
+// una sola compra da igual; en cuanto promedias a la baja y vendes una parte,
+// las dos cifras dejan de cuadrar entre sí. El coste de lo que TE QUEDA también
+// sale ahora de la cola FIFO: los lotes que no se han vendido.
+function fifoRestante(stockId){
+  const txs=transactions.filter(t=>t.stockId===stockId&&(t.type==='buy'||t.type==='sell'))
+    .slice().sort((a,b)=>{
+      const d=(a.date||'').localeCompare(b.date||'');
+      if(d!==0)return d;
+      if(a.type!==b.type)return a.type==='buy'?-1:1;
+      return 0;
+    });
+  const lots=[];
+  txs.forEach(t=>{
+    if(t.type==='buy'){
+      const sh=t.shares||0;
+      lots.push({shares:sh,perShare:sh>0?((t.total||0)+(t.costs||0))/sh:0});
+    } else {
+      let q=t.shares||0;
+      while(q>1e-9&&lots.length){
+        const l=lots[0], take=Math.min(q,l.shares);
+        l.shares-=take; q-=take;
+        if(l.shares<=1e-9)lots.shift();
+      }
+    }
+  });
+  const shares=lots.reduce((s,l)=>s+l.shares,0);
+  const cost=lots.reduce((s,l)=>s+l.shares*l.perShare,0);
+  return {shares,cost};
+}
+// Dividendos: un ingreso marcado como dividendo pertenece a una acción si tú
+// se lo has asignado (stockId) o si el concepto del banco nombra a la empresa.
+function dividendosDe(stockId){
+  const s=(cfg.stocks||[]).find(x=>x.id===stockId);
+  if(!s)return [];
+  const cn=_pfNorm(s.name);
+  return (typeof incomeLog!=='undefined'?incomeLog:[]).filter(x=>{
+    if(x.cat!=='dividendo')return false;
+    if(x.stockId)return x.stockId===stockId;
+    if(!cn||cn.length<4)return false;
+    const d=_pfNorm(x.desc||'');
+    return d.includes(cn)||(cn.split(' ')[0].length>=5&&d.includes(cn.split(' ')[0]));
+  });
+}
+function dividendosSinAsignar(){
+  return (typeof incomeLog!=='undefined'?incomeLog:[]).filter(x=>x.cat==='dividendo'&&
+    !(cfg.stocks||[]).some(s=>dividendosDe(s.id).some(d=>d.id===x.id)));
+}
+function asignarDividendo(incId){
+  const x=incomeLog.find(e=>e.id===incId); if(!x)return;
+  const L=(cfg.stocks||[]).filter(s=>!soldStocks.has(s.id)||true);
+  if(!L.length){toast('No tienes acciones registradas');return;}
+  const r=prompt('¿De qué acción es este dividendo?\n\n'+fmtDate(x.date)+' · '+(x.desc||'')+' · '+fmt2(x.amt)+'€\n\n'+
+    L.map((s,i)=>'  '+(i+1)+') '+s.name).join('\n')+'\n\nEscribe el número (en blanco = dejarlo sin asignar).','');
+  if(r==null||!String(r).trim())return;
+  const i=parseInt(String(r).trim(),10);
+  if(!(i>=1&&i<=L.length)){toast('Ese número no existe');return;}
+  x.stockId=L[i-1].id;
+  save(); renderRentabilidad(); try{renderAnalisis();}catch(e){}
+  toast('Dividendo asignado a '+L[i-1].name);
+}
 function getStockAggregates(){
   const agg={};
   cfg.stocks.forEach(s=>{
@@ -1962,13 +2027,16 @@ function getStockAggregates(){
         }
       }
     }
+    const rest=fifoRestante(s.id);                       // v146 · coste de los lotes vivos
+    const avgPriceRest=rest.shares>1e-9?rest.cost/rest.shares:avgPrice;
     agg[s.id]={
       id:s.id,name:s.name,existing:s.existing,
       buys,sells,
       totalShares:remainingShares,
       totalBoughtShares,totalBoughtValue,avgPrice,
+      costeRestante:rest.cost, avgPriceRest,
       currentVal,
-      unrealizedPL:currentVal>0&&totalBoughtValue>0?currentVal-totalBoughtValue*(remainingShares/totalBoughtShares):null,
+      unrealizedPL:currentVal>0&&rest.cost>0?currentVal-rest.cost:null,
       isClosed:soldStocks.has(s.id)||totalBoughtShares>0&&remainingShares<=0,
     };
   });
@@ -2199,6 +2267,20 @@ function buildLiveRecord(year,month){
       .reduce((s,t)=>s+(t.amount||0),0);
     funds_data[f.id]={vl:vl||0,aport};
   });
+  // v147 · Los cierres guardados restan la deuda del patrimonio; el patrimonio
+  // de HOY no la restaba en ninguna parte, así que el día que registres una
+  // hipoteca el panel te enseñaría el patrimonio bruto y los históricos el
+  // neto, y el salto entre ambos parecería una revalorización.
+  const debts_data={};
+  (cfg.debts||[]).forEach(d=>{
+    let v=(typeof getBalanceAsOf==='function')?getBalanceAsOf('debt',d.id,year,month):null;
+    if(v===null){
+      const prevR=[...records].reverse().find(r=>r.debts_data&&r.debts_data[d.id]!=null);
+      v=prevR?prevR.debts_data[d.id]:0;
+    }
+    if(v)debts_data[d.id]=v;
+  });
+  const _deudaViva=Object.values(debts_data).reduce((s,v)=>s+(Number(v)||0),0);
   const stocks_data={};
   const agg=getStockAggregates();
   Object.values(agg).forEach(a=>{
@@ -2253,7 +2335,8 @@ function buildLiveRecord(year,month){
   return{
     id:label.toLowerCase(),label,year,month,
     accounts_data,funds_data,stocks_data,
-    cash,fondos,acc,broker_liq:brokerLiq,pat:cash+fondos+acc,
+    cash,fondos,acc,broker_liq:brokerLiq,debts_data,deuda:_deudaViva,
+    pat:cash+fondos+acc-_deudaViva,
     ing,gas,aho,nomina,ipt,nomina_data,gastos_data,ing_transactions,
     ap:monthAports>0,aamt:monthAports,new_aports:monthAports,
     isLive:true,hasData,
@@ -3068,24 +3151,39 @@ function bankSaldoFinal(rows,hi,header,idxDate,idxAmt){
   }
   return best;
 }
-function bankGuessAccount(isTR){
+// v145 · Esto devolvía SIEMPRE una cuenta: si no reconocía el banco, la
+// primera de la lista. Y esa cuenta venía escrita en el cuadro de diálogo, así
+// que bastaba con darle a Enter sin leer para meter el saldo de un banco en
+// otro — un error de un segundo que no se nota hasta que cuadras el patrimonio
+// meses después. Ahora distingue entre reconocer el banco y no reconocerlo:
+// cuando no lo reconoce, el cuadro sale vacío y tienes que escribir el número.
+function bankGuessAccount(isTR){ return bankGuessAccountInfo(isTR).acc; }
+function bankGuessAccountInfo(isTR){
   const A=cfg.accounts||[];
   const re=isTR?/trade|republic/i:/evo|bankinter|banco|caixa|santander|bbva|sabadell|\bing\b|openbank|abanca|unicaja|kutxa|imagin|revolut|n26/i;
-  return A.find(a=>re.test(a.name||''))||A.find(a=>!/efectivo|casa|metálico/i.test(a.name||''))||A[0]||null;
+  const claro=A.find(a=>re.test(a.name||''));
+  if(claro)return {acc:claro,seguro:true};
+  const otra=A.find(a=>!/efectivo|casa|metálico/i.test(a.name||''))||A[0]||null;
+  return {acc:otra,seguro:false};
 }
 // Nunca se adivina la cuenta a solas: un saldo puesto en la cuenta equivocada
 // es peor que no ponerlo. Se propone la más probable y decides tú.
 function bankAplicarSaldo(info,isTR){
   if(!info)return false;
   const A=cfg.accounts||[]; if(!A.length)return false;
-  const gi=Math.max(0,A.indexOf(bankGuessAccount(isTR)));
+  const g=bankGuessAccountInfo(isTR);
+  const gi=Math.max(0,A.indexOf(g.acc));
   const lista=A.map((a,n)=>{
     const e=getBalanceEntries('acc',a.id)[0];
     return '  '+(n+1)+') '+a.name+(e?'  → ahora '+fmt2(e.amount)+'€ a '+fmtDate(e.date):'  → sin saldo registrado');
   }).join('\n');
   const r=prompt('El extracto termina con un saldo de '+fmt2(info.saldo)+'€ el '+fmtDate(info.date)+
     (info.orden==='desc'?'\n(el archivo viene del movimiento más reciente al más antiguo)':'')+'.\n\n'+
-    '¿A qué cuenta corresponde? Escribe el número. Deja en blanco para no tocar la liquidez.\n\n'+lista,String(gi+1));
+    (g.seguro
+      ? '¿A qué cuenta corresponde? Escribe el número. Deja en blanco para no tocar la liquidez.'
+      : 'NO he podido identificar el banco del extracto, así que no propongo ninguna cuenta.\n'+
+        'Escribe el número de la que sea. Deja en blanco para no tocar la liquidez.')+
+    '\n\n'+lista, g.seguro?String(gi+1):'');
   if(r==null||!String(r).trim())return false;
   const n=parseInt(String(r).trim(),10);
   if(!(n>=1&&n<=A.length)){toast('Ese número de cuenta no existe: no he tocado la liquidez.');return false;}
@@ -3123,23 +3221,40 @@ function processBankRows(rows){
       // frente a "ENDESA ENERGIA" son claves distintas, así que cada importación
       // repetía todas las domiciliaciones y las nóminas. Ahora se indexan ambas
       // formas y la fila nueva se comprueba contra las dos.
-      const existing=new Set();
-      incomeLog.forEach(x=>{const n=x.desc||'';
-        existing.add(dedupKey('i',x.date,x.amt,n));
-        existing.add(dedupKey('i',x.date,x.amt,cleanDesc(n)||n));});
-      expenseLog.forEach(x=>{const n=x.name||'';
-        existing.add(dedupKey('e',x.date,x.amt,n));
-        existing.add(dedupKey('e',x.date,x.amt,cleanDesc(n)||n));});
+      // v145 · Antes esto era un conjunto de claves: si la clave existía, la
+      // fila se descartaba. Pero dos compras iguales el mismo día por el mismo
+      // importe son un caso normal — dos cafés, dos veces al estanco — y la
+      // segunda se perdía en silencio. Ahora cada apunte guardado se puede
+      // gastar UNA vez: si tienes uno y el extracto trae dos, entra el que
+      // falta; si el extracto trae los mismos que ya tienes, no entra ninguno.
+      const _entradas=[], _idx=new Map();
+      const _claves=(kind,date,amt,raw)=>{
+        const bruto=dedupKey(kind,date,amt,raw);
+        const limpio=dedupKey(kind,date,amt,cleanDesc(raw)||raw);
+        return limpio===bruto?[bruto]:[bruto,limpio];
+      };
+      const _registrar=(kind,date,amt,raw)=>{
+        const e={usado:false};
+        _claves(kind,date,amt,raw).forEach(k=>{
+          if(!_idx.has(k))_idx.set(k,[]);
+          _idx.get(k).push(e);
+        });
+        _entradas.push(e);
+      };
+      incomeLog.forEach(x=>_registrar('i',x.date,x.amt,x.desc||''));
+      expenseLog.forEach(x=>_registrar('e',x.date,x.amt,x.name||''));
+      // «gastar» un apunte ya guardado: solo entonces la fila es un duplicado
       const yaEsta=(kind,date,amt,raw)=>{
-        const limpio=cleanDesc(raw)||raw;
-        return existing.has(dedupKey(kind,date,amt,raw))||existing.has(dedupKey(kind,date,amt,limpio));
+        for(const k of _claves(kind,date,amt,raw)){
+          const arr=_idx.get(k); if(!arr)continue;
+          const e=arr.find(x=>!x.usado);
+          if(e){e.usado=true;return true;}
+        }
+        return false;
       };
-      const marcar=(kind,date,amt,raw)=>{
-        const limpio=cleanDesc(raw)||raw;
-        existing.add(dedupKey(kind,date,amt,raw));
-        existing.add(dedupKey(kind,date,amt,limpio));
-      };
+      const marcar=()=>{};   // lo que entra nuevo ya no bloquea a su gemelo
       let addI=0,addE=0,skip=0,dup=0;const newInc=[],newExp=[];const skippedNames=[];
+      const dupDetalle=[];   // para poder decirte CUÁLES se han quedado fuera
       for(let i=hi+1;i<rows.length;i++){
         const r=rows[i];if(!r||r.length<2)continue;
         const date=bankDateISO(r[idxDate>=0?idxDate:0]);
@@ -3170,8 +3285,8 @@ function processBankRows(rows){
         }
         if(!merchant||isNaN(amt)||amt===0)continue;
         if(BANK_SKIP.test(merchant)){skip++;skippedNames.push(merchant.slice(0,40));continue;}
-        if(amt>0){if(yaEsta('i',date,amt,merchant)){dup++;continue;}marcar('i',date,amt,merchant);newInc.push({id:'inc_'+Date.now()+'_'+i,date,desc:(cleanDesc(merchant)||merchant).slice(0,60),cat:incCat||catIncome(merchant),amt:Math.round(amt*100)/100});addI++;}
-        else{const a=Math.abs(amt);if(yaEsta('e',date,a,merchant)){dup++;continue;}marcar('e',date,a,merchant);newExp.push({id:'exp_'+Date.now()+'_'+i,date,name:(cleanDesc(merchant)||merchant).slice(0,60),amt:Math.round(a*100)/100,cat:catExpense(merchant),kind:'estructural'});addE++;}
+        if(amt>0){if(yaEsta('i',date,amt,merchant)){dup++;dupDetalle.push(fmtDate(date)+'  '+fmt2(amt)+'€  '+String(merchant).slice(0,28));continue;}marcar('i',date,amt,merchant);newInc.push({id:'inc_'+Date.now()+'_'+i,date,desc:(cleanDesc(merchant)||merchant).slice(0,60),cat:incCat||catIncome(merchant),amt:Math.round(amt*100)/100});addI++;}
+        else{const a=Math.abs(amt);if(yaEsta('e',date,a,merchant)){dup++;dupDetalle.push(fmtDate(date)+'  −'+fmt2(a)+'€  '+String(merchant).slice(0,28));continue;}marcar('e',date,a,merchant);newExp.push({id:'exp_'+Date.now()+'_'+i,date,name:(cleanDesc(merchant)||merchant).slice(0,60),amt:Math.round(a*100)/100,cat:catExpense(merchant),kind:'estructural'});addE++;}
       }
       // v119 · Antes, si no había nada nuevo, salía un aviso de una línea y ya.
       // Con un archivo que no se lee bien el resultado es idéntico al de un
@@ -3205,7 +3320,11 @@ function processBankRows(rows){
       const catTxt=Object.entries(catCount).sort((a,b)=>b[1]-a[1]).map(([c,n])=>'   '+(CAT_LABELS[c]||c)+': '+n).join('\n');
       const skipTxt=skippedNames.length?('\n\nOmitidos como traspaso propio (revisa que ninguno sea un gasto/ingreso real):\n   '+[...new Set(skippedNames)].slice(0,12).join('\n   ')+(skippedNames.length>12?'\n   …y '+(skippedNames.length-12)+' más':'')):'';
       const saldoTxt=saldoInfo?('\n\nSaldo al final del extracto: '+fmt2(saldoInfo.saldo)+'€ a '+fmtDate(saldoInfo.date)+' (te preguntaré a qué cuenta aplicarlo)'):'\n\n⚠ Este archivo no trae columna de saldo: la liquidez habrá que ponerla a mano.';
-      const msg=resumenLectura+'\n\nImportar movimientos ('+(isTR?'Trade Republic':'banco')+'):\n\n\u00b7 '+addI+' ingresos\n\u00b7 '+addE+' gastos\n\u00b7 '+skip+' traspasos/bolsa omitidos\n\u00b7 '+dup+' duplicados omitidos\n\nGastos por categoría:\n'+catTxt+skipTxt+saldoTxt+'\n\n¿Continuar? (luego puedes recategorizar en la lista de gastos)';
+      const dupTxt=dup?('\n\nYa los tenías, no se importan:\n'+
+        dupDetalle.slice(0,10).map(x=>'\u00b7 '+x).join('\n')+
+        (dupDetalle.length>10?('\n\u00b7 … y '+(dupDetalle.length-10)+' más'):'')+
+        '\n(si alguno era una compra distinta del mismo día y el mismo importe, añádelo a mano)'):'';
+      const msg=resumenLectura+'\n\nImportar movimientos ('+(isTR?'Trade Republic':'banco')+'):\n\n\u00b7 '+addI+' ingresos\n\u00b7 '+addE+' gastos\n\u00b7 '+skip+' traspasos/bolsa omitidos\n\u00b7 '+dup+' ya registrados\n\nGastos por categoría:\n'+catTxt+skipTxt+dupTxt+saldoTxt+'\n\n¿Continuar? (luego puedes recategorizar en la lista de gastos)';
       if(!confirm(msg)){return;}
       incomeLog.push(...newInc);expenseLog.push(...newExp);
       let tocado=false;
@@ -3272,6 +3391,22 @@ const NOMINAS_HIST=[];
 // desglose (sin tocar el importe); si no, se añade. Idempotente.
 // ═══ IMPORTAR POSICIONES DEGIRO (Portfolio) ═════════════════════════
 function _pfNorm(s){return String(s).toUpperCase().replace(/[^A-Z0-9& ]/g,'').replace(/\s+/g,' ').trim();}
+// v145 · «Alphabet Class A» y «Alphabet Class C» son dos acciones distintas,
+// con precios distintos y plusvalías distintas. Los normalizadores de nombres
+// borran la palabra CLASS y la letra, así que las dos quedaban en «ALPHABET» y
+// cualquier valoración se emparejaba con la primera que apareciera. La letra se
+// lee aparte y manda: si las dos la tienen y no coinciden, no son la misma.
+function _claseAccion(s){
+  const t=String(s||'').toUpperCase().replace(/[^A-Z0-9 ]/g,' ');
+  let m=t.match(/\b(?:CLASS|CLASE|SERIES|SERIE|CL)\s+([A-C])\b/);
+  if(m)return m[1];
+  m=t.match(/\s([A-C])\s+(?:SHARES?|ACCIONES)\b/);
+  return m?m[1]:null;
+}
+function mismaClase(a,b){
+  const ca=_claseAccion(a), cb=_claseAccion(b);
+  return !ca||!cb||ca===cb;
+}
 
 // ═══ SUBIDA DIRECTA DE NÓMINAS EN PDF ═══════════════════════════════
 const _NOM_MESES={enero:1,febrero:2,marzo:3,abril:4,mayo:5,junio:6,julio:7,agosto:8,septiembre:9,octubre:10,noviembre:11,diciembre:12};
@@ -3737,8 +3872,12 @@ function avgAho(n_=24){
   const sl=records.slice(-n_);
   return sl.length?sl.reduce((s,r)=>s+(r.aho||0),0)/sl.length:0;
 }
+// v147 · El tipo mensual era anual/12, que compuesto doce veces da MÁS del
+// anual que has escrito: un 8% se convertía en un 8,30% real. Parece poco y no
+// lo es — sobre 100.000€ a 25 años son 49.000€ que no existen. El mensual
+// equivalente de verdad es la raíz doceava, no la doceava parte.
 function project(pat,aho,rate,months){
-  const r=rate/12;
+  const r=Math.pow(1+rate,1/12)-1;
   return Array.from({length:months},(_,i)=>{
     const n_=i+1;
     return Math.round(pat*Math.pow(1+r,n_)+aho*(Math.pow(1+r,n_)-1)/r);
@@ -3941,7 +4080,7 @@ function renderKPIDetail(id){
       const dateNote=sInfo.source==='none'?'sin valorar':(dateStr+(isStale?' ⚠':''));
       rows+=`<tr>
         <td>${s.name}${s.existing?'<br><small style="color:var(--faint)">sin datos de compra</small>':
-          hasBuys?`<br><small style="color:var(--muted)">${fmt(a.totalShares)} acc × ${fmt(a.avgPrice)}€ avg · ${fmt(a.totalBoughtValue)}€ invertido</small>`:''}
+          hasBuys?`<br><small style="color:var(--muted)">${fmt(a.totalShares)} acc × ${fmt(a.avgPriceRest||a.avgPrice)}€ medio · ${fmt(a.costeRestante||a.totalBoughtValue)}€ de coste vivo</small>`:''}
         </td>
         <td>
           <strong>${val>0?fmt(val)+'€':'—'}</strong><br><small style="color:${dateColor}">${dateNote}</small>
@@ -4053,18 +4192,18 @@ function renderKPIDetail(id){
 function inlineUpdateAccount(id,val){
   const lr=last();if(!lr.accounts_data)return;
   lr.accounts_data[id]=parseFloat(val)||0;
-  lr.cash=getCash(lr);lr.pat=getCash(lr)+getFondos(lr)+getAcc(lr);
+  lr.cash=getCash(lr);lr.pat=patOf(lr);      // v147 · sin perder la deuda por el camino
 }
 function inlineUpdateFund(id,val){
   const lr=last();if(!lr.funds_data)return;
   if(!lr.funds_data[id])lr.funds_data[id]={vl:0,aport:0};
   lr.funds_data[id].vl=parseFloat(val)||0;
-  lr.fondos=getFondos(lr);lr.pat=getCash(lr)+getFondos(lr)+getAcc(lr);
+  lr.fondos=getFondos(lr);lr.pat=patOf(lr);
 }
 function inlineUpdateStock(id,val){
   const lr=last();if(!lr.stocks_data)return;
   lr.stocks_data[id]=parseFloat(val)||0;
-  lr.acc=getAcc(lr);lr.pat=getCash(lr)+getFondos(lr)+getAcc(lr);
+  lr.acc=getAcc(lr);lr.pat=patOf(lr);
 }
 function saveInlineAccount(id){save();renderAll();toast('Cuenta actualizada');}
 function saveInlineFund(id){save();renderAll();toast('Fondo actualizado');}
@@ -4140,7 +4279,12 @@ function renderProjChips(){
   }).join('');
   const base=getProjBase();
   const bl=document.getElementById('proj-base-label');
-  if(bl)bl.textContent='Total seleccionado (línea real y base de proyección): '+fmt(base)+'€';
+  if(bl){
+    const cc=comps.find(c=>c.id==='cash');
+    const enCash=(projSel&&projSel.has('cash')&&cc)?cc.amount:0;
+    bl.textContent='Total seleccionado (línea real y base de proyección): '+fmt(base)+'€'+
+      (enCash>0?('  ·  de los cuales '+fmt(enCash)+'€ en liquidez, que se proyectan al 2%, no al rendimiento de la bolsa'):'');
+  }
 }
 
 function toggleProjComp(id){
@@ -4190,7 +4334,8 @@ function pbSnap(ym){ // {cash,fondos,stocks,pat} al final del mes ym
     const n=new Date();const lv=buildLiveRecord(n.getFullYear(),n.getMonth()+1);
     let brk=0;(cfg.brokers||[]).forEach(bk=>{const e=getBalanceEntries('broker',bk.id);if(e&&e[0])brk+=e[0].amount||0;});
     const stocksOnly=(lv.acc||0)-brk; // la liquidez ociosa del bróker es cash, no ganancia de acciones
-    return {cash:(lv.cash||0)+brk,fondos:lv.fondos||0,stocks:stocksOnly,pat:(lv.cash||0)+(lv.fondos||0)+(lv.acc||0)};
+    return {cash:(lv.cash||0)+brk,fondos:lv.fondos||0,stocks:stocksOnly,
+            pat:(lv.cash||0)+(lv.fondos||0)+(lv.acc||0)-(lv.deuda||0)};
   }
   let rec=null,recM='';records.forEach(r=>{const m=r.year+'-'+String(r.month).padStart(2,'0');if(m<=ym&&m>=recM){rec=r;recM=m;}});
   const stk=pbStockVal(ym);
@@ -4330,12 +4475,28 @@ function initCharts(){
   const lastRec=histRecords[histRecords.length-1];
   // Projection base = selected portion of the current patrimony (so the dashed lines
   // start exactly where the filtered real line ends); no monthly contributions
+  // v146 · Antes el escenario del 8% se aplicaba también a la liquidez de la
+  // cuenta corriente, y en veinte años eso es un montón de dinero que no va a
+  // existir. La parte en cash crece a lo que de verdad renta el efectivo.
   const projBase=selectedPortion(lastRec),projAho=0;
+  const PROJ_CASH=0.02;
+  let projCash=0;
+  try{
+    if(projSel&&projSel.has('cash')){
+      const cc=getProjComponents().find(c=>c.id==='cash');
+      projCash=Math.max(0,Math.min(projBase,cc?cc.amount:0));
+    }
+  }catch(e){}
+  const projInv=Math.max(0,projBase-projCash);
+  const proyecta=(rate)=>{
+    const a=project(projInv,projAho,rate,PROJ), b=project(projCash,0,PROJ_CASH,PROJ);
+    return a.map((v,i)=>v+(b[i]||0));
+  };
   // Project until the end of the retirement year (2045, when user turns 67)
   const RETIRE_END_YEAR=2045;
   const monthsToRetire=(RETIRE_END_YEAR-lastRec.year)*12+(12-lastRec.month);
   const PROJ=rangeCutsFuture?0:Math.max(48,monthsToRetire);
-  const cons=project(projBase,projAho,0.03,PROJ),base=project(projBase,projAho,0.05,PROJ),opt=project(projBase,projAho,0.08,PROJ),sup=project(projBase,projAho,0.11,PROJ);
+  const cons=proyecta(0.03),base=proyecta(0.05),opt=proyecta(0.08),sup=proyecta(0.11);
   const histL=histRecords.map(r=>r.label),projL=[];
   let lbl=histRecords[histRecords.length-1].label;
   for(let i=0;i<PROJ;i++){lbl=nextLabel(lbl);projL.push(lbl);}
@@ -4682,7 +4843,7 @@ function renderFormLists(){
 // ─── CALCULATIONS ────────────────────────────────────────────────────
 function calcSummary(){
   // Use transaction list totals if user has entered transactions; else fall back to hidden fields
-  const txTotal=_ingresos.reduce((s,t)=>s+t.amt,0);
+  const txTotal=sumaNeta(_ingresos);
   const rendNeto=(last().rendimientos||[]).reduce((s,r)=>s+(r.neto||0),0);
   const ing=txTotal>0?(txTotal+rendNeto):((n('fi-nom'))+(n('fi-ipt'))+(n('fi-otros'))+rendNeto);
   const cashCur=Array.from(document.querySelectorAll('.acc-input')).reduce((s,i)=>s+(parseFloat(i.value)||0),0);
@@ -4703,8 +4864,8 @@ function calcSummary(){
   const newAports=aportsCur;
   // Gastos totales: fijos + estructurales + ocio
   const gastosFijos=getGastosFijosTotal();
-  const gastosEst=_gastosEst.reduce((s,g)=>s+g.amt,0);
-  const gastosOcio=_gastosOcio.reduce((s,g)=>s+g.amt,0);
+  const gastosEst=sumaNeta(_gastosEst);
+  const gastosOcio=sumaNeta(_gastosOcio);
   const gastosTotal=gastosFijos+gastosEst+gastosOcio;
   // If user has filled in gastos detail, use that; otherwise estimate from Δcash
   const gas=gastosTotal>0?gastosTotal:Math.max(0,ing-deltaCash-newAports);
@@ -5085,14 +5246,25 @@ function formPeriod(){
 
 // Load the working arrays from the persistent logs for the selected month
 function loadMonthEntries(){
+  // v144 · Los apuntes compensados (el Bizum y los gastos que reembolsa) se
+  // siguen viendo en la lista —son movimientos reales del banco— pero llevan
+  // marca y NO suman en ningún total. Antes salían del ahorro y de "en qué
+  // gastas" pero seguían contando aquí, y los dos sitios no cuadraban.
+  const _ci=(typeof compIncomeIds==='function')?compIncomeIds():new Set();
+  const _ce=(typeof compExpenseIds==='function')?compExpenseIds():new Set();
   // No month filter: load ALL entries, each carries its own date
   _ingresos=incomeLog.slice().sort((a,b)=>(b.date||'').localeCompare(a.date||''))
-    .map(e=>({id:e.id,fecha:e.date,desc:e.desc,cat:e.cat,amt:e.amt,nd:e.nd}));
+    .map(e=>({id:e.id,fecha:e.date,desc:e.desc,cat:e.cat,amt:e.amt,nd:e.nd,comp:_ci.has(e.id)}));
   _gastosEst=expenseLog.filter(e=>e.kind==='estructural').sort((a,b)=>(b.date||'').localeCompare(a.date||''))
-    .map(e=>({id:e.id,name:e.name,amt:e.amt,cat:e.cat,date:e.date}));
+    .map(e=>({id:e.id,name:e.name,amt:e.amt,cat:e.cat,date:e.date,comp:_ce.has(e.id)}));
   _gastosOcio=expenseLog.filter(e=>e.kind==='ocio').sort((a,b)=>(b.date||'').localeCompare(a.date||''))
-    .map(e=>({id:e.id,name:e.name,amt:e.amt,cat:e.cat,date:e.date}));
+    .map(e=>({id:e.id,name:e.name,amt:e.amt,cat:e.cat,date:e.date,comp:_ce.has(e.id)}));
 }
+// suma que ignora lo compensado — la que vale para cualquier total
+function sumaNeta(arr){ return (arr||[]).reduce((s,x)=>s+(x.comp?0:(x.amt||0)),0); }
+function nComp(arr){ return (arr||[]).filter(x=>x.comp).length; }
+function sumaComp(arr){ return (arr||[]).reduce((s,x)=>s+(x.comp?(x.amt||0):0),0); }
+const COMP_TAG='<span title="compensado: no cuenta en los totales" style="font-size:9.5px;background:var(--amber);color:#fff;border-radius:3px;padding:0 4px;margin-left:3px">comp</span>';
 
 function initGastosForm(){loadMonthEntries();renderGastosList();renderTxIngList();}
 
@@ -5112,10 +5284,12 @@ function toggleIncomeSection(){
 function renderIncomeSummary(){
   const el=document.getElementById('income-summary');
   if(!el)return;
+  const _ci=(typeof compIncomeIds==='function')?compIncomeIds():new Set();
   const n=incomeLog.length;
-  const total=incomeLog.reduce((s,e)=>s+(e.amt||0),0);
+  const total=incomeLog.reduce((s,e)=>s+(_ci.has(e.id)?0:(e.amt||0)),0);
   const nowY=new Date().getFullYear();
-  const yearTotal=incomeLog.filter(e=>String(e.date||'').startsWith(String(nowY))).reduce((s,e)=>s+(e.amt||0),0);
+  const yearTotal=incomeLog.filter(e=>String(e.date||'').startsWith(String(nowY)))
+    .reduce((s,e)=>s+(_ci.has(e.id)?0:(e.amt||0)),0);
   el.innerHTML='<div style="background:#E6F4F1;border:1px solid #9CD3C8;border-radius:var(--r-sm);padding:.5rem .75rem">'+
     '<div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:.5rem;align-items:baseline">'+
       '<strong style="font-size:12px;color:var(--teal)">Ingresos ('+n+' apunte'+(n!==1?'s':'')+')</strong>'+
@@ -5127,13 +5301,14 @@ function renderTxIngList(){
   renderIncomeSummary();
   const el=document.getElementById('tx-ing-list');
   if(!el)return;
-  const total=_ingresos.reduce((s,t)=>s+t.amt,0);
+  const total=sumaNeta(_ingresos);
+  const nC=nComp(_ingresos), sC=sumaComp(_ingresos);
   el.innerHTML=_ingresos.length?
     _ingresos.map((t,i)=>`
-      <div class="tx-item">
+      <div class="tx-item"${t.comp?' style="opacity:.55"':''}>
         <span class="tx-date">${t.fecha||''}</span>
         <span class="tx-cat ${ING_CSS[t.cat]||'cat-otro2'}">${ING_CATS[t.cat]||t.cat}</span>
-        <span class="tx-desc">${t.desc}${t.nd?` <span class="tx-sub">(dev:${fmt(t.nd.total_dev||0)}€ / ded:${fmt(t.nd.total_ded||0)}€)</span>`:''}</span>
+        <span class="tx-desc">${t.desc}${t.comp?COMP_TAG:''}${t.nd?` <span class="tx-sub">(dev:${fmt(t.nd.total_dev||0)}€ / ded:${fmt(t.nd.total_ded||0)}€)</span>`:''}</span>
         <span class="tx-amt">${fmt2(t.amt)}€</span>
         ${t.nd?`<button type="button" class="btn-xs" onclick="viewNominaDesglose(this.dataset.id)" data-id="${t.id}" title="Consultar desglose">🔍</button>`:''}
         ${nrBtn('i',t.id)}
@@ -5141,13 +5316,13 @@ function renderTxIngList(){
         <button type="button" class="btn-xs danger" onclick="deleteIngTx(this.dataset.id)" data-id="${t.id}" title="Eliminar">✕</button>
       </div>`).join('')
     +`<div style="display:flex;justify-content:space-between;padding:.4rem .75rem;background:var(--surface2);border-radius:var(--r-xs);font-size:12.5px;font-weight:700;border:.5px solid var(--border)">
-        <span>Total ingresos</span><span class="pos">${fmt(total)}€</span>
+        <span>Total ingresos${nC?` <span style="font-weight:400;font-size:11px;color:var(--muted)">· ${nC} compensado${nC!==1?'s':''} fuera (${fmt(sC)}€)</span>`:''}</span><span class="pos">${fmt(total)}€</span>
       </div>`
     :'<p style="font-size:11.5px;color:var(--faint);padding:.25rem 0">Sin ingresos introducidos. Usa el formulario de abajo para añadir.</p>';
   // Sync hidden fields for calcSummary
-  const nom=_ingresos.filter(t=>t.cat==='nomina').reduce((s,t)=>s+t.amt,0);
-  const ipt=_ingresos.filter(t=>t.cat==='ipt').reduce((s,t)=>s+t.amt,0);
-  const otros=_ingresos.filter(t=>!['nomina','ipt'].includes(t.cat)).reduce((s,t)=>s+t.amt,0);
+  const nom=sumaNeta(_ingresos.filter(t=>t.cat==='nomina'));
+  const ipt=sumaNeta(_ingresos.filter(t=>t.cat==='ipt'));
+  const otros=sumaNeta(_ingresos.filter(t=>!['nomina','ipt'].includes(t.cat)));
   const hf=id=>document.getElementById(id);
   if(hf('fi-nom'))hf('fi-nom').value=nom.toFixed(2);
   if(hf('fi-ipt'))hf('fi-ipt').value=ipt.toFixed(2);
@@ -5232,10 +5407,10 @@ function renderGastosList(){
   // Populate category selects with all categories (incl. new ones)
   ['gest-cat','gocio-cat'].forEach(id=>{const sel=document.getElementById(id);if(sel){const cur=sel.value;sel.innerHTML=Object.entries(CAT_LABELS).map(([k,v])=>'<option value="'+k+'">'+v+'</option>').join('');if(cur)sel.value=cur;}});
   const mkRows=(arr,kind)=>arr.length?arr.map((g)=>`
-    <div class="gasto-item">
+    <div class="gasto-item"${g.comp?' style="opacity:.55"':''}>
       <span class="tx-date" style="min-width:58px">${fmtDate(g.date)}</span>
       <span class="gasto-item-cat ${CAT_CSS[g.cat]||'cat-otro'}">${CAT_LABELS[g.cat]||g.cat}</span>
-      <span class="gasto-item-name">${g.name}</span>
+      <span class="gasto-item-name">${g.name}${g.comp?COMP_TAG:''}</span>
       <span class="gasto-item-amt">${fmt2(g.amt)}€</span>
       ${nrBtn('e',g.id)}
       <button type="button" class="btn-xs" onclick="editExpense('${kind}',this.dataset.id)" data-id="${g.id}" title="Editar">✏️</button>
@@ -5244,9 +5419,9 @@ function renderGastosList(){
     :'<p style="font-size:11.5px;color:var(--faint);padding:.25rem 0">Ninguno registrado.</p>';
   const mkColl=(arr,kind)=>{
     if(arr.length<=6) return mkRows(arr,kind);
-    const total=arr.reduce((s,g)=>s+g.amt,0);const cid='coll-'+kind;
+    const total=sumaNeta(arr);const nC=nComp(arr);const cid='coll-'+kind;
     return `<div class="coll-head" onclick="toggleColl('${cid}')">
-      <span style="font-size:12px;font-weight:600">${arr.length} movimientos</span>
+      <span style="font-size:12px;font-weight:600">${arr.length} movimientos${nC?' · '+nC+' comp.':''}</span>
       <span style="font-size:12px"><strong>${fmt(total)}€</strong> <span id="${cid}-arr" class="coll-arr">▾</span></span></div>
       <div id="${cid}" style="display:none;margin-top:.3rem">${mkRows(arr,kind)}</div>`;
   };
@@ -5271,7 +5446,7 @@ function renderGastosList(){
   if(el1){
     let html='';
     if(active){
-      const tot=estFiltered.reduce((s,g)=>s+g.amt,0);
+      const tot=sumaNeta(estFiltered);
       html='<div style="font-size:11.5px;color:var(--navy);font-weight:600;padding:.3rem .1rem">'+estFiltered.length+' resultados · '+fmt(tot)+'€ <a href="#" onclick="event.preventDefault();clearGestFilter()" style="font-weight:400;color:var(--muted);margin-left:.4rem">✕ quitar filtro</a></div>';
       html+=mkRows(estFiltered,'estructural');
     } else {
@@ -5280,7 +5455,7 @@ function renderGastosList(){
     el1.innerHTML=html;
   }
   if(el2)el2.innerHTML=mkColl(_gastosOcio,'ocio');
-  const tot=getGastosFijosTotal()+_gastosEst.reduce((s,g)=>s+g.amt,0)+_gastosOcio.reduce((s,g)=>s+g.amt,0);
+  const tot=getGastosFijosTotal()+sumaNeta(_gastosEst)+sumaNeta(_gastosOcio);
   const el=document.getElementById('gasto-total-display');
   if(el)el.textContent=fmt(tot)+'€';
   calcSummary();
@@ -5341,7 +5516,8 @@ function addGastoOcio(){
 }
 function getGastosFijosTotal(){
   // Sum of all fijo entries currently shown (for the summary total in the form)
-  return expenseLog.filter(e=>e.kind==='fijo').reduce((s,e)=>s+(e.amt||0),0);
+  const _ce=(typeof compExpenseIds==='function')?compExpenseIds():new Set();
+  return expenseLog.filter(e=>e.kind==='fijo').reduce((s,e)=>s+(_ce.has(e.id)?0:(e.amt||0)),0);
 }
 
 // Populate the fijo-type dropdown and list all fijo payments (dated)
@@ -6607,13 +6783,15 @@ function reembSave(){
   if(!eids.length){toast('Selecciona al menos un gasto.');return;}
   const notes={}; eids.forEach(e=>{const n=(_reembForm.notes[e]||'').trim();if(n)notes[e]=n;});
   reembolsos.push({id:'rb_'+Date.now().toString(36)+Math.random().toString(36).slice(2,6),incomeId:_reembForm.incomeId,expenseIds:eids,notes,created:new Date().toISOString()});
-  _reembForm=null; _reembListOpen=true; try{localStorage.setItem('dlv_reemblistopen','1');}catch(e){} save(); renderReembolsos(); renderTxIngList();
-  toast('✅ Compensación guardada: '+eids.length+' gasto(s) emparejado(s)');
+  _reembForm=null; _reembListOpen=true; try{localStorage.setItem('dlv_reemblistopen','1');}catch(e){} save();
+  renderReembolsos(); loadMonthEntries(); renderTxIngList(); renderGastosList(); renderAll();
+  toast('✅ Compensación guardada: '+eids.length+' gasto(s) fuera de los totales');
 }
 function reembUndo(id){
   const rb=reembolsos.find(r=>r.id===id); if(!rb)return;
   if(!confirm('Deshacer esta compensación. El ingreso y sus gastos volverán a contar en ingresos, gastos y ahorro. ¿Continuar?'))return;
-  reembolsos=reembolsos.filter(r=>r.id!==id); save(); renderReembolsos(); renderTxIngList();
+  reembolsos=reembolsos.filter(r=>r.id!==id); save();
+  renderReembolsos(); loadMonthEntries(); renderTxIngList(); renderGastosList(); renderAll();
   toast('Compensación deshecha');
 }
 function renderReembForm(){
@@ -6690,9 +6868,18 @@ function renderAhorro(){
   const rateP=incP>0?savP/incP:0;
   const nMonths=sel.length||1;
   const avgSavP=savP/nMonths, avgIncP=incP/nMonths, avgExpP=expP/nMonths;
-  const incAll=sum(M.map(x=>x.income)),expAll=sum(M.map(x=>x.expense)),savAll=incAll-expAll;
+  // v146 · El mes en curso está a medias: si la nómina entra el día 25 y hoy es
+  // día 10, ese mes son todo gastos y ningún ingreso. Metido en la media
+  // histórica hundía la tasa y encima no cuadraba con el KPI de al lado, que sí
+  // termina en el último mes cerrado. Fuera hasta que el mes acabe.
+  const _mesActual=new Date().getFullYear()+'-'+String(new Date().getMonth()+1).padStart(2,'0');
+  const MH=M.filter(x=>x.month<_mesActual);
+  const _baseH=MH.length?MH:M;
+  const incAll=sum(_baseH.map(x=>x.income)),expAll=sum(_baseH.map(x=>x.expense)),savAll=incAll-expAll;
   const rateAll=incAll>0?savAll/incAll:0;
-  const avgSav12=(M.slice(-12).reduce((s,x)=>s+x.savings,0))/(M.slice(-12).length||1);
+  // v147 · el mes en curso está a medias y rebajaba la aportación proyectada
+  const _m12=_baseH.slice(-12);
+  const avgSav12=(_m12.reduce((s,x)=>s+x.savings,0))/(_m12.length||1);
   const kc=(t,v,s,c)=>'<div class="kpi"><div class="kpi-lbl">'+t+'</div><div class="kpi-val '+(c||'')+'" style="font-size:16px">'+v+'</div>'+(s?'<div style="font-size:10.5px;color:var(--muted)">'+s+'</div>':'')+'</div>';
   // v110 · La cifra grande es SIN extraordinarios: es la que se repetirá el mes
   // que viene y la única sobre la que puedes hacer planes. Debajo, en gris, la
@@ -6707,7 +6894,7 @@ function renderAhorro(){
        (conExtra?'sin extraordinarios · '+perLbl+'<br>'+sub('con extraordinarios: '+Math.round(R.tasa*100)+'%')
                 :perLbl+' · de cada 100€'),
        R.tasaOrd>=0?'pos':'neg')+
-    kc('Tasa de ahorro (histórico)',Math.round(rateAll*100)+'%','sobre '+M.length+' meses',rateAll>=0?'pos':'neg')+
+    kc('Tasa de ahorro (histórico)',Math.round(rateAll*100)+'%','sobre '+_baseH.length+' meses cerrados',rateAll>=0?'pos':'neg')+
     kc('Ahorro medio mensual',(avgSavOrd>=0?'+':'')+fmt(avgSavOrd)+'€',
        (conExtra?'sin extraordinarios · '+perLbl+'<br>'+sub('con extraordinarios: '+(avgSavP>=0?'+':'')+fmt(avgSavP)+'€')
                 :perLbl),
@@ -6805,23 +6992,42 @@ function renderAhorroCats(){
   }).join('')+
   '<div style="font-size:10.5px;color:var(--muted);margin-top:.4rem">Total gastado ('+perTxt+'): '+fmt(total)+'€. La tendencia (▲/▼) compara con el periodo anterior equivalente; si no hay histórico previo, sale "—".</div>';
 }
+// v147 · Dos arreglos aquí. Uno: arrancaba del último CIERRE guardado, que
+// puede ser de hace semanas, mientras el panel arranca del patrimonio de hoy —
+// dos proyecciones de la misma app partiendo de sitios distintos. Dos: sumaba
+// tu ahorro mensual durante los 40 años del gráfico, jubilado incluido. Las
+// aportaciones paran cuando dejas de cobrar una nómina.
+const JUB_FIN_ANIO=2045;   // último año con nómina; el panel usa el mismo
 function renderAhorroProjection(avgSav){
   const proj=document.getElementById('ah-proj');if(!proj)return;
   const years=Math.max(1,Math.min(40,parseInt(document.getElementById('ah-years')?.value)||10));
   const rAnnual=Math.max(0,(parseFloat(document.getElementById('ah-return')?.value)||0)/100);
-  const rm=rAnnual/12, n=years*12;
-  let start=0; try{const lr=last();start=(getCash(lr)||0)+(getFondos(lr)||0)+(getAcc(lr)||0);}catch(e){}
+  const rm=Math.pow(1+rAnnual,1/12)-1, n=years*12;   // v147 · equivalente mensual real
+  let start=0;
+  try{
+    const nd=new Date(), lv=buildLiveRecord(nd.getFullYear(),nd.getMonth()+1);
+    const lr=(lv&&lv.hasData)?lv:last();
+    start=patOf(lr);
+  }catch(e){ try{const lr=last();start=patOf(lr);}catch(_){} }
+  // meses que te quedan aportando, desde hoy hasta el final del último año con nómina
+  const hoyD=new Date();
+  const mesesAportando=Math.max(0,(JUB_FIN_ANIO-hoyD.getFullYear())*12+(12-(hoyD.getMonth()+1)));
   const labels=[],data=[],aportData=[];
   let bal=start, aportAcc=start;
   for(let mo=0;mo<=n;mo++){
-    if(mo>0){bal=bal*(1+rm)+avgSav; aportAcc+=avgSav;}
+    if(mo>0){
+      const ap=(mo<=mesesAportando)?avgSav:0;
+      bal=bal*(1+rm)+ap; aportAcc+=ap;
+    }
     if(mo%12===0){labels.push('Año '+(mo/12));data.push(Math.round(bal));aportData.push(Math.round(aportAcc));}
   }
   const finalV=data[data.length-1], aportadoTotal=aportAcc, interes=finalV-aportadoTotal;
+  const cortaAportes=(n>mesesAportando);
   const kc=(t,v,s,c)=>'<div class="kpi"><div class="kpi-lbl">'+t+'</div><div class="kpi-val '+(c||'')+'" style="font-size:16px">'+v+'</div>'+(s?'<div style="font-size:10.5px;color:var(--muted)">'+s+'</div>':'')+'</div>';
   proj.innerHTML=
     kc('Patrimonio en '+years+' años',fmt(finalV)+'€','partiendo de '+fmt(start)+'€','pos')+
-    kc('Total aportado',fmt(aportadoTotal)+'€','ahorro medio '+fmt(avgSav)+'€/mes','')+
+    kc('Total aportado',fmt(aportadoTotal)+'€','ahorro medio '+fmt(avgSav)+'€/mes'+
+       (cortaAportes?'<br><span style="color:var(--faint)">aportas '+Math.round(mesesAportando/12)+' años más, hasta '+JUB_FIN_ANIO+'</span>':''),'')+
     kc('Generado por rentabilidad',(interes>=0?'+':'')+fmt(interes)+'€','al '+(rAnnual*100).toFixed(1)+'% anual',interes>=0?'pos':'neg');
   const dark=document.body.classList.contains('dark');
   if(_ahProjChart)_ahProjChart.destroy();
@@ -8767,37 +8973,83 @@ function renderRentabilidad(){
     const gain=vl-invested;const pct=invested>0?gain/invested*100:0;
     rows.push({name:f.name,vl,invested,xirr:r,simple:pct});
   });
-  // Stocks aggregate (open): buys (negative) + current value (positive)
+  // v146 · Aquí había el error más gordo de la app. La "rentabilidad total"
+  // comparaba el valor de lo que te queda contra TODO lo que habías comprado,
+  // sin sumar lo que cobraste al vender. Una posición de la que hubieras
+  // vendido la mitad salía en pérdidas aunque hubieras ganado dinero: compras
+  // 1.000€, vendes la mitad por 700€, lo que queda vale 600€ → lo real es
+  // +30% y la tabla decía −40%. Y en la misma fila la TIR sí contaba las
+  // ventas, así que las dos columnas se contradecían. Ahora la rentabilidad
+  // total es (valor + ventas + dividendos − invertido) / invertido, que es lo
+  // que de verdad ha pasado con tu dinero. Las posiciones ya cerradas también
+  // aparecen: su resultado es tan real como el de las abiertas.
   const agg=getStockAggregates();
-  cfg.stocks.filter(s=>agg[s.id]&&agg[s.id].totalShares>1e-6&&!agg[s.id].isClosed).forEach(s=>{
-    const val=getStockInfo(s.id).amount||0;
+  cfg.stocks.filter(s=>agg[s.id]&&agg[s.id].totalBoughtShares>1e-6).forEach(s=>{
+    const A=agg[s.id];
+    const abierta=A.totalShares>1e-6&&!A.isClosed;
+    const val=abierta?(getStockInfo(s.id).amount||0):0;
     const buys=transactions.filter(t=>t.type==='buy'&&t.stockId===s.id&&t.date)
       .map(t=>({date:t.date,amount:-((t.total||0)+(t.costs||0))}));
+    // lo que entra por una venta es neto de comisión, igual que en la plusvalía
     const sells=transactions.filter(t=>t.type==='sell'&&t.stockId===s.id&&t.date)
-      .map(t=>({date:t.date,amount:(t.total||0)}));
+      .map(t=>({date:t.date,amount:(t.total||0)-(t.costs||0)}));
+    const divs=dividendosDe(s.id).filter(d=>d.date).map(d=>({date:d.date,amount:d.amt||0}));
     if(val<=0&&!buys.length)return;
-    const invested=agg[s.id]?.totalBoughtValue||0;
-    let flows=[...buys,...sells];
+    const invested=A.totalBoughtValue||0;
+    const cobradoV=sells.reduce((a,x)=>a+x.amount,0);
+    const cobradoD=divs.reduce((a,x)=>a+x.amount,0);
+    let flows=[...buys,...sells,...divs];
     if(val>0)flows.push({date:today,amount:val});
-    const r=flows.length>=2?xirr(flows.sort((a,b)=>a.date.localeCompare(b.date))):null;
-    const gain=val-invested;const pct=invested>0?gain/invested*100:0;
-    rows.push({name:s.name,vl:val,invested,xirr:r,simple:pct});
+    let r=flows.length>=2?xirr(flows.sort((a,b)=>a.date.localeCompare(b.date))):null;
+    // v147 · Anualizar tres semanas de un +4% da +98%/año. Es correcto y es
+    // mentira: no dice nada de lo que rinde la posición, solo que el periodo es
+    // demasiado corto para anualizar nada. Por debajo de medio año no se enseña.
+    const prim=flows.length?flows[0].date:null;
+    const dias=prim?Math.round((Date.parse(today)-Date.parse(prim))/864e5):0;
+    const corta=dias<180;
+    if(corta)r=null;
+    const gain=val+cobradoV+cobradoD-invested;
+    const pct=invested>0?gain/invested*100:0;
+    rows.push({name:s.name,vl:val,invested,xirr:r,simple:pct,corta,dias,
+               vendido:cobradoV,divid:cobradoD,cerrada:!abierta});
   });
   if(!rows.length){box.innerHTML='<p style="font-size:12px;color:var(--muted)">Sin datos suficientes. Registra aportaciones y valores con fecha.</p>';return;}
   box.innerHTML='<table style="width:100%;border-collapse:collapse;font-size:12px">'+
     '<tr style="color:var(--muted);font-size:10.5px;text-align:right"><td style="text-align:left">Activo</td><td>Invertido</td><td>Valor</td><td>Rent. total</td><td>Anualizada (TIR)</td></tr>'+
     rows.map(r=>{
-      const totClass=r.vl>=r.invested?'pos':'neg';
+      const totClass=r.simple>=0?'pos':'neg';
+      const extra=[];
+      if(r.vendido>0.005)extra.push(fmt(r.vendido)+'€ vendidos');
+      if(r.divid>0.005)extra.push(fmt(r.divid)+'€ en dividendos');
+      const sub=extra.length?('<br><small style="color:var(--muted);font-size:9.5px">'+
+        (r.cerrada?'cerrada · ':'')+extra.join(' · ')+'</small>'):
+        (r.cerrada?'<br><small style="color:var(--muted);font-size:9.5px">cerrada</small>':'');
       const xClass=(r.xirr!=null&&r.xirr>=0)?'pos':'neg';
       return '<tr>'+
-        '<td style="text-align:left">'+r.name+'</td>'+
+        '<td style="text-align:left">'+r.name+(sub||'')+'</td>'+
         '<td style="text-align:right">'+fmt(r.invested)+'€</td>'+
         '<td style="text-align:right">'+fmt(r.vl)+'€</td>'+
         '<td style="text-align:right" class="'+totClass+'">'+(r.simple>=0?'+':'')+Math.round(r.simple)+'%</td>'+
-        '<td style="text-align:right" class="'+xClass+'">'+(r.xirr!=null?((r.xirr>=0?'+':'')+(r.xirr*100).toFixed(1)+'%/año'):'<span style="color:var(--faint)">—</span>')+'</td>'+
+        '<td style="text-align:right" class="'+xClass+'">'+(r.xirr!=null?((r.xirr>=0?'+':'')+(r.xirr*100).toFixed(1)+'%/año')
+          :('<span style="color:var(--faint)" title="'+(r.corta?'lleva '+r.dias+' días: muy poco para anualizar':'faltan fechas')+'">'+
+            (r.corta?'&lt;6 meses':'—')+'</span>'))+'</td>'+
       '</tr>';
     }).join('')+'</table>'+
-    '<p style="font-size:10px;color:var(--faint);margin-top:.4rem">La TIR (XIRR) anualiza el rendimiento según las fechas reales de cada aportación. "—" si faltan aportaciones con fecha.</p>';
+    '<p style="font-size:10px;color:var(--faint);margin-top:.4rem">Rent. total = (valor actual + lo vendido + dividendos − invertido) / invertido. '+
+    'La TIR (XIRR) anualiza eso mismo según las fechas reales de cada movimiento. '+
+    '"&lt;6 meses" = lleva demasiado poco tiempo para anualizar sin decir una barbaridad; "—" = faltan fechas.</p>'+
+    (function(){
+      const sin=(typeof dividendosSinAsignar==='function')?dividendosSinAsignar():[];
+      if(!sin.length)return '';
+      return '<div style="margin-top:.5rem;padding:.45rem .6rem;border:1px solid var(--border);border-radius:6px">'+
+        '<div style="font-size:11px;font-weight:600;margin-bottom:.25rem">Dividendos sin asignar ('+sin.length+')</div>'+
+        '<div style="font-size:10.5px;color:var(--muted);margin-bottom:.3rem">No he sabido de qué acción son, así que no cuentan en ninguna rentabilidad. Asígnalos y entran.</div>'+
+        sin.slice(0,8).map(x=>'<div style="display:flex;justify-content:space-between;gap:.4rem;align-items:center;font-size:11px;padding:.15rem 0">'+
+          '<span>'+fmtDate(x.date)+' · '+escapeHtml(String(x.desc||'').slice(0,26))+'</span>'+
+          '<span style="white-space:nowrap">'+fmt2(x.amt)+'€ <button type="button" class="btn-xs" onclick="asignarDividendo(this.dataset.id)" data-id="'+x.id+'">asignar</button></span></div>').join('')+
+        (sin.length>8?'<div style="font-size:10px;color:var(--faint)">y '+(sin.length-8)+' más</div>':'')+
+        '</div>';
+    })();
 }
 
 function renderFiscalCalendar(){
@@ -10874,7 +11126,8 @@ function xtbAplicarOps(lista){
     let s=o.tick?cfg.stocks.find(x=>String(x.tick||'').toUpperCase()===o.tick.toUpperCase()):null;
     if(!s){
       const nn=_pfNorm(o.prod);
-      s=cfg.stocks.find(x=>{const cn=_pfNorm(x.name);return cn&&nn&&(nn===cn||nn.startsWith(cn)||cn.startsWith(nn));});
+      s=cfg.stocks.find(x=>{const cn=_pfNorm(x.name);
+        return cn&&nn&&mismaClase(o.prod,x.name)&&(nn===cn||nn.startsWith(cn)||cn.startsWith(nn));});
     }
     if(!s){
       s={id:'stk_xtb_'+Date.now()+'_'+k,name:dgTitulo(o.prod),existing:false};
@@ -10916,7 +11169,8 @@ function degiroPlan(parsed,date){
     if(!stk&&r.tick&&byTick[String(r.tick).toUpperCase()]){ stk=byTick[String(r.tick).toUpperCase()]; how='ticker'; }
     if(!stk){
       const pn=_pfNorm(r.prod);
-      stk=cfg.stocks.find(s=>{const cn=_pfNorm(s.name);return cn&&(pn===cn||pn.startsWith(cn)||cn.startsWith(pn));});
+      stk=cfg.stocks.find(s=>{const cn=_pfNorm(s.name);
+        return cn&&mismaClase(r.prod,s.name)&&(pn===cn||pn.startsWith(cn)||cn.startsWith(pn));});
       if(stk)how='nombre';
     }
     if(!stk){ nuevas.push(r); return; }
@@ -11020,7 +11274,36 @@ function brokerRead(parsed,fname,mtime,fuente){
     fname:fname||(fuente==='xtb'?'extracto XTB':'Portfolio.csv'),date:d};
   showDegiroPreview();
 }
+// v145 · La suma de las operaciones de caja de XTB solo es el saldo si el
+// extracto arranca en la apertura de la cuenta. Hasta ahora eso era un aviso
+// y punto. Se puede hacer mejor: si ya tienes un saldo de ese bróker anterior
+// al periodo del extracto, el saldo nuevo es ese más lo que se ha movido, y
+// entonces da igual que el extracto sea de un mes suelto. Y si no hay saldo
+// previo y el extracto no empieza por un ingreso, no se propone cifra: la
+// tendrás que poner tú, que es mejor que dar por buena una inventada.
+function xtbEfectivo(P,brokerId){
+  const suma=(P.parsed.cash!=null&&isFinite(P.parsed.cash))?Number(P.parsed.cash):null;
+  if(suma==null)return {cash:null,modo:'nada'};
+  const ops=(P.parsed.cashOps||[]).slice().filter(o=>o.fecha).sort((a,b)=>a.fecha.localeCompare(b.fecha));
+  const arrancaEnCero=ops.length&&/deposit|ingreso|dep[oó]sito/i.test(ops[0].tipo);
+  let previo=null;
+  if(brokerId&&brokerId!=='__nuevo__'){
+    const desde=P.parsed.desde||P.date;
+    previo=(typeof getBalanceEntries==='function'?getBalanceEntries('broker',brokerId):[])
+      .filter(b=>b.date<desde).sort((a,b)=>b.date.localeCompare(a.date))[0]||null;
+  }
+  if(previo)return {cash:Math.round((previo.amount+suma)*100)/100,modo:'encadenado',previo};
+  if(arrancaEnCero)return {cash:suma,modo:'completo'};
+  return {cash:null,modo:'parcial',suma};
+}
+function degiroSetBroker(v){
+  if(!_dgPending)return;
+  _dgPending.brokerSel=v;
+  if(!_dgPending.cashManual)_dgPending.cash=undefined;   // se recalcula para el bróker elegido
+  showDegiroPreview();
+}
 function degiroSetCash(v){
+  if(_dgPending)_dgPending.cashManual=true;
   if(!_dgPending)return;
   const t=String(v||'').trim();
   _dgPending.cash=t===''?null:(dgNum(t));
@@ -11093,30 +11376,42 @@ function showDegiroPreview(){
     h+='</tbody></table></div>';
   }
   // ─── Efectivo y a qué bróker va ───────────────────────────────────
-  if(P.cash===undefined) P.cash=(plan.cash!=null?plan.cash:null);
   const B=cfg.brokers||[];
   if(P.brokerSel===undefined){
     const sug=brokerSugerido(P.fuente);
     P.brokerSel=sug?sug.id:'__nuevo__';
   }
+  const efe=esXtb?xtbEfectivo(P,P.brokerSel):null;
+  if(P.cash===undefined) P.cash=esXtb?efe.cash:(plan.cash!=null?plan.cash:null);
   h+='<div style="border:1px solid var(--border);border-radius:6px;padding:.55rem .6rem;margin-bottom:.6rem">'+
     '<div style="font-size:11.5px;font-weight:600;margin-bottom:.35rem">Liquidez del bróker</div>'+
     '<div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;font-size:11.5px">'+
       '<label>Efectivo <input type="text" value="'+(P.cash==null?'':fmt2(P.cash))+'" '+
         'onchange="degiroSetCash(this.value)" style="width:96px;font-size:11px;padding:1px 5px;text-align:right"> €</label>'+
-      '<label>en <select id="dg-broker" onchange="_dgPending.brokerSel=this.value" style="font-size:11px;padding:1px 5px">'+
+      '<label>en <select id="dg-broker" onchange="degiroSetBroker(this.value)" style="font-size:11px;padding:1px 5px">'+
         B.map(b=>'<option value="'+b.id+'"'+(P.brokerSel===b.id?' selected':'')+'>'+escapeHtml(b.name)+'</option>').join('')+
         '<option value="__nuevo__"'+(P.brokerSel==='__nuevo__'?' selected':'')+'>➕ crear «'+brokerNombreFuente(P.fuente)+'»</option>'+
         '<option value="">— no tocar la liquidez —</option>'+
       '</select></label>'+
     '</div>';
   if(esXtb){
-    h+='<div style="font-size:10.5px;color:var(--amber);margin-top:.35rem;line-height:1.35">'+
-      '<strong>Ojo con este número.</strong> XTB no publica el saldo de la cuenta en ninguna casilla: esto es la '+
-      '<strong>suma de las '+(P.parsed.cashOps||[]).length+' operaciones de caja</strong> del extracto '+
-      (P.parsed.desde?('('+fmtDate(P.parsed.desde)+' → '+fmtDate(P.parsed.hasta||P.date)+')'):'')+
-      '. Solo coincide con tu saldo real si pediste el extracto <strong>desde la apertura de la cuenta</strong>. '+
-      'Si pediste solo el último mes, corrígelo aquí a mano.</div>';
+    const per=P.parsed.desde?('('+fmtDate(P.parsed.desde)+' → '+fmtDate(P.parsed.hasta||P.date)+')'):'';
+    if(efe.modo==='encadenado'){
+      h+='<div style="font-size:10.5px;color:var(--muted);margin-top:.35rem;line-height:1.35">'+
+        'Calculado sobre el saldo que ya tenías: <strong>'+fmt2(efe.previo.amount)+'€</strong> a '+fmtDate(efe.previo.date)+
+        ' más <strong>'+fmt2(P.parsed.cash)+'€</strong> de movimiento en el extracto '+per+'. '+
+        'Como el extracto empieza después de ese saldo, no hace falta que venga desde la apertura.</div>';
+    } else if(efe.modo==='completo'){
+      h+='<div style="font-size:10.5px;color:var(--muted);margin-top:.35rem;line-height:1.35">'+
+        'Suma de las '+(P.parsed.cashOps||[]).length+' operaciones de caja del extracto '+per+'. '+
+        'El primer movimiento es un ingreso, así que el extracto parece arrancar con la cuenta a cero.</div>';
+    } else {
+      h+='<div style="font-size:10.5px;color:var(--red);margin-top:.35rem;line-height:1.35">'+
+        '<strong>No puedo saber tu saldo con este extracto.</strong> XTB no publica el saldo en ninguna casilla, '+
+        'y este archivo '+per+' empieza por una operación que no es un ingreso: había dinero antes y no sé cuánto. '+
+        'El movimiento del periodo es '+fmt2(efe.suma||0)+'€. '+
+        'Escribe el saldo a mano, o vuelve a exportar desde la apertura de la cuenta.</div>';
+    }
     const flu=(P.parsed.cashOps||[]).filter(o=>o.flujo);
     if(flu.length){
       h+='<label style="display:block;font-size:11px;margin-top:.4rem">'+
@@ -12017,6 +12312,7 @@ function dgEmpareja(ops){
         let mejor=null,md=99;
         cfg.stocks.forEach(x=>{
           const a=dgNorm(x.name); if(!a||a.length<6)return;
+          if(!mismaClase(x.name,p.prod))return;     // clases distintas: no son la misma acción
           const d=dgDist(a,nn);
           if(d<md){md=d;mejor=x;}
         });
@@ -12107,9 +12403,15 @@ function dgTxRevisar(){
   if(!confirm(msg))return;
   dgTxAplicar(cambian);
 }
+// v145 · Antes esto borraba TODAS las compras y ventas de cada acción del
+// archivo y las rehacía desde el CSV, con el argumento de que «el CSV es la
+// verdad». Con un solo bróker colaba. Con dos no: una acción que tengas
+// también en XTB perdía sus operaciones de XTB sin decir nada, porque el CSV
+// de DEGIRO no las menciona. Ahora se añade lo que falta y no se borra nada;
+// lo que el archivo no trae se cuenta y se te dice, pero se queda donde está.
 function dgTxAplicar(cambian){
   if(!guardedAction('importar '+_dgPend.length+' operaciones de DEGIRO'))return;
-  let nuevasAcc=0, borradas=0, creadas=0;
+  let nuevasAcc=0, creadas=0, yaEstaban=0, ajenas=0;
   cambian.forEach(p=>{
     let s=p.stock;
     if(!s){
@@ -12117,34 +12419,56 @@ function dgTxAplicar(cambian){
          name:dgTitulo(p.prod), existing:false, idea:'', isin:p.isin||null};
       cfg.stocks.push(s); nuevasAcc++;
     }else if(!s.isin&&p.isin){ s.isin=p.isin; }
-    // fuera las operaciones anteriores de esta acción: el CSV es la verdad
-    const antes=transactions.length;
-    transactions=transactions.filter(t=>!(t.stockId===s.id&&(t.type==='buy'||t.type==='sell')));
-    borradas+=antes-transactions.length;
     const ops=p.ops.slice().sort((a,b)=>a.date.localeCompare(b.date));
-    dgFifo(ops);
+    const ordenes=new Set(ops.map(o=>o.orden));
     ops.forEach((o,i)=>{
-      const t={id:'tx_dg_'+o.orden.slice(0,8)+'_'+i+'_'+Date.now().toString(36),
+      // por número de orden si lo hay y, si no, por fecha + títulos + tipo,
+      // que es lo que permite reconocer una operación que anotaste a mano
+      const rep=transactions.find(t=>t.stockId===s.id&&(
+        (o.orden&&t.orden===o.orden) ||
+        (t.type===o.tipo&&t.date===o.date&&Math.abs((t.shares||0)-o.n)<0.001)));
+      if(rep){
+        if(!rep.orden&&o.orden)rep.orden=o.orden;     // queda identificada para la próxima
+        yaEstaban++; return;
+      }
+      transactions.push({id:'tx_dg_'+String(o.orden||'').slice(0,8)+'_'+i+'_'+Date.now().toString(36),
         stockId:s.id, stockName:s.name, name:s.name, type:o.tipo, date:o.date,
         shares:o.n, price:Math.round(o.precio*1e6)/1e6,
         costs:Math.round(o.costes*100)/100,
         total:Math.round(o.valEUR*100)/100,
-        orden:o.orden, src:'degiro_tx'};
-      if(o.tipo==='sell'){t.costBasis=o.costBasis;t.gainLoss=o.gainLoss;}
-      transactions.push(t); creadas++;
+        year:parseInt(String(o.date).slice(0,4)),
+        orden:o.orden, src:'degiro_tx'});
+      creadas++;
     });
-    // si el CSV la deja a cero, es una posición cerrada
-    if(Math.abs(p.titCsv)<0.5)soldStocks.add(s.id); else soldStocks.delete(s.id);
+    // operaciones que ya tienes de esta acción y que el archivo no menciona:
+    // o son de otro bróker o las anotaste a mano. Ni se tocan ni se cuentan
+    // como error, pero conviene saber cuántas son. Se cuentan DESPUÉS de
+    // emparejar, para no contar como ajena una que sí estaba en el archivo.
+    ajenas+=transactions.filter(t=>t.stockId===s.id&&(t.type==='buy'||t.type==='sell')
+              &&!(t.orden&&ordenes.has(t.orden))).length;
+    // el archivo solo puede cerrar una posición si no queda nada de ella en
+    // ningún otro sitio; con dos brókers eso hay que mirarlo, no suponerlo
+    if(Math.abs(p.titCsv)<0.5){
+      const tit=transactions.filter(t=>t.stockId===s.id)
+        .reduce((a,t)=>a+(t.type==='buy'?(t.shares||0):t.type==='sell'?-(t.shares||0):0),0);
+      if(Math.abs(tit)<0.5)soldStocks.add(s.id);
+    } else soldStocks.delete(s.id);
   });
+  // el FIFO se rehace sobre TODAS las operaciones de cada acción, vengan del
+  // bróker que vengan: si no, el coste de adquisición saldría cojo
+  try{recomputeAllStockGains();}catch(e){console.warn('fifo',e);}
   _dgPend=null;
   save();
   try{renderFormLists();}catch(e){}
   renderAll();
   try{renderAnalisis();}catch(e){}
   try{renderPrecios();}catch(e){}
-  alert('✅ Listo.\n\n· '+creadas+' operaciones registradas\n· '+borradas+' anteriores sustituidas'+
+  alert('✅ Listo.\n\n· '+creadas+' operaciones nuevas registradas'+
+    (yaEstaban?('\n· '+yaEstaban+' ya las tenías (no se duplican)'):'')+
     (nuevasAcc?('\n· '+nuevasAcc+' acción(es) nuevas creadas'):'')+
-    '\n\nRevisa el cuadre de posiciones en Análisis: ahora los títulos y el coste deberían coincidir con DEGIRO.');
+    (ajenas?('\n· '+ajenas+' operaciones tuyas que este archivo no menciona: se quedan como están '+
+             '(si tienes esa acción también en XTB, es lo normal)'):'')+
+    '\n\nRevisa el cuadre de posiciones en Análisis.');
 }
 // "MAISONS DU MONDE SA" en mayúsculas queda feo en las tablas
 function dgTitulo(s){
