@@ -610,7 +610,7 @@ nav::-webkit-scrollbar{display:none}
 <div class="topbar">
 <header>
   <div>
-    <div class="logo">Disfruta la Vida <small>· Patrimonio · v149</small></div>
+    <div class="logo">Disfruta la Vida <small>· Patrimonio · v151</small></div>
     <div style="font-size:10px;opacity:.5;margin-top:2px" id="hdr-date"></div>
   </div>
   <div class="hdr-right">
@@ -1466,21 +1466,8 @@ nav::-webkit-scrollbar{display:none}
     </div>
     <div id="an-blocks"></div>
   </div>
-  <div class="card">
-    <div class="card-hdr"><div class="card-title">Rentabilidad de tu capital</div>
-      <div style="font-size:11px;color:var(--muted)">ponderada por dinero y tiempo — cuenta la rotación y el capital variable</div>
-    </div>
-    <div style="display:flex;gap:.4rem;margin-bottom:.6rem;flex-wrap:wrap" id="an-scope-tabs">
-      <button type="button" class="btn-xs an-scope active" data-scope="acciones" onclick="setAnScope('acciones')">Acciones</button>
-      <button type="button" class="btn-xs an-scope" data-scope="fondos" onclick="setAnScope('fondos')">Fondos</button>
-    </div>
-    <div class="kpi-grid" id="an-capital"></div>
-    <div id="an-capital-note"></div>
-  </div>
-  <div class="card">
-    <div class="card-hdr"><div class="card-title">Efecto disposición</div></div>
-    <div id="an-disposition"></div>
-  </div>
+  
+  
 <style>
 #precios-body .px-m{display:none}
 @media(max-width:520px){
@@ -1518,8 +1505,79 @@ nav::-webkit-scrollbar{display:none}
     <div style="position:relative;height:300px"><canvas id="an-evol-chart"></canvas></div>
     <div id="an-evol-empty" style="font-size:11.5px;color:var(--muted);display:none">Importa tu cartera de DEGIRO (botón en Datos entrada) varias veces para ir dibujando la evolución diaria. Cada importación deja un punto con fecha.</div>
     <div style="font-size:10.5px;color:var(--muted);margin-top:.4rem"><strong>Valor</strong> = acciones a cierre (sin liquidez del broker). <strong>Rentabilidad</strong> = TWR: encadena el rendimiento diario neutralizando aportaciones y ventas, para que el dinero metido en cada momento no distorsione la curva.</div>
+<div class="card">
+    <div class="card-hdr"><div class="card-title">Rentabilidad de tu capital</div>
+      <div style="font-size:11px;color:var(--muted)">ponderada por dinero y tiempo — cuenta la rotación y el capital variable</div>
+    </div>
+    <div style="display:flex;gap:.4rem;margin-bottom:.6rem;flex-wrap:wrap" id="an-scope-tabs">
+      <button type="button" class="btn-xs an-scope active" data-scope="acciones" onclick="setAnScope('acciones')">Acciones</button>
+      <button type="button" class="btn-xs an-scope" data-scope="fondos" onclick="setAnScope('fondos')">Fondos</button>
+    </div>
+    <div class="kpi-grid" id="an-capital"></div>
+    <div id="an-capital-note"></div>
+  </div>
+<div class="card">
+    <div class="card-hdr"><div class="card-title">Efecto disposición</div></div>
+    <div id="an-disposition"></div>
+  </div>
+<div class="card">
+    <div class="card-hdr"><div class="card-title">Resultado por operación</div>
+      <div style="font-size:11px;color:var(--muted)">cerradas sólidas, abiertas translúcidas</div>
+    </div>
+    <div style="display:flex;gap:.4rem;margin-bottom:.5rem">
+      <button type="button" class="btn-xs an-chart-btn active" data-mode="eur" onclick="setAnChartMode('eur')">€ Beneficio</button>
+      <button type="button" class="btn-xs an-chart-btn" data-mode="pct" onclick="setAnChartMode('pct')">% Rentabilidad</button>
+    </div>
+    <div style="position:relative;height:360px"><canvas id="an-chart"></canvas></div>
+    <div id="an-chart-note" style="font-size:10.5px;color:var(--muted);margin-top:.4rem"></div>
+  </div>
+<div class="card">
+    <div class="card-hdr"><div class="card-title">Recorrido de cada operación</div>
+      <div style="font-size:11px;color:var(--muted)">cuánto llegó a ganar y a perder por el camino</div>
+    </div>
+    <div style="position:relative;height:360px"><canvas id="an-rec-chart"></canvas></div>
+    <div id="an-rec-note" style="font-size:10.5px;color:var(--muted);margin-top:.4rem"></div>
   </div>
   <div class="card">
+    <div class="card-hdr"><div class="card-title">Análisis por compra</div>
+      <div style="font-size:11px;color:var(--muted)">cada compra por separado, repartida por FIFO</div>
+    </div>
+    <div id="an-compras"></div>
+  </div>
+
+
+
+  </div>
+  
+
+  
+  
+  <div class="card">
+    <div class="card-hdr"><div class="card-title">Registro de cierres</div></div>
+    <div id="an-closed"></div>
+  </div>
+  <div class="card">
+    <div class="card-hdr"><div class="card-title">Posiciones abiertas</div></div>
+    <div id="an-open"></div>
+  </div>
+<style>
+#an-cuadrepos .cp-m{display:none}
+@media(max-width:520px){
+  #an-cuadrepos .detail-table{font-size:10.5px;table-layout:fixed;width:100%}
+  #an-cuadrepos .detail-table td,#an-cuadrepos .detail-table th{padding:.32rem .18rem;white-space:normal;overflow-wrap:anywhere}
+  #an-cuadrepos .detail-table td:first-child{width:26%}
+  #an-cuadrepos .cp-x{display:none}
+  #an-cuadrepos input{width:56px!important}
+}
+</style>
+  <div class="card" id="cuadrepos-card">
+    <div class="card-hdr" style="cursor:pointer" onclick="toggleCuadrePos()">
+      <div class="card-title"><span id="cp-arrow">&#9656;</span> Cuadre de posiciones contra DEGIRO</div>
+      <div style="font-size:11px;color:var(--muted)" id="cp-badge"></div>
+    </div>
+    <div id="an-cuadrepos"></div>
+  </div>
+<div class="card">
     <div class="card-hdr"><div class="card-title">Fondos: valor y rentabilidad</div>
       <div style="font-size:11px;color:var(--muted)">Cobas reconstruido con VL reales (2017→hoy); Magallanes y AZ Valor desde jun-2026. Los triángulos marcan las aportaciones.</div>
     </div>
@@ -1548,49 +1606,7 @@ nav::-webkit-scrollbar{display:none}
   <!-- ══ v100 · FICHA POR FONDO ═══════════════════════════════════ -->
   <input type="file" id="nav-file" accept=".csv,.json,text/csv,application/json" style="display:none" onchange="navImportFile(event)">
   <div id="fund-cards"></div>
-  <div class="card">
-    <div class="card-hdr"><div class="card-title">Resultado por operación</div>
-      <div style="font-size:11px;color:var(--muted)">cerradas sólidas, abiertas translúcidas</div>
-    </div>
-    <div style="display:flex;gap:.4rem;margin-bottom:.5rem">
-      <button type="button" class="btn-xs an-chart-btn active" data-mode="eur" onclick="setAnChartMode('eur')">€ Beneficio</button>
-      <button type="button" class="btn-xs an-chart-btn" data-mode="pct" onclick="setAnChartMode('pct')">% Rentabilidad</button>
-    </div>
-    <div style="position:relative;height:360px"><canvas id="an-chart"></canvas></div>
-    <div id="an-chart-note" style="font-size:10.5px;color:var(--muted);margin-top:.4rem"></div>
-  </div>
-  <div class="card">
-    <div class="card-hdr"><div class="card-title">Recorrido de cada operación</div>
-      <div style="font-size:11px;color:var(--muted)">cuánto llegó a ganar y a perder por el camino</div>
-    </div>
-    <div style="position:relative;height:360px"><canvas id="an-rec-chart"></canvas></div>
-    <div id="an-rec-note" style="font-size:10.5px;color:var(--muted);margin-top:.4rem"></div>
-  </div>
-  <div class="card">
-    <div class="card-hdr"><div class="card-title">Registro de cierres</div></div>
-    <div id="an-closed"></div>
-  </div>
-  <div class="card">
-    <div class="card-hdr"><div class="card-title">Posiciones abiertas</div></div>
-    <div id="an-open"></div>
-  </div>
-<style>
-#an-cuadrepos .cp-m{display:none}
-@media(max-width:520px){
-  #an-cuadrepos .detail-table{font-size:10.5px;table-layout:fixed;width:100%}
-  #an-cuadrepos .detail-table td,#an-cuadrepos .detail-table th{padding:.32rem .18rem;white-space:normal;overflow-wrap:anywhere}
-  #an-cuadrepos .detail-table td:first-child{width:26%}
-  #an-cuadrepos .cp-x{display:none}
-  #an-cuadrepos input{width:56px!important}
-}
-</style>
-  <div class="card" id="cuadrepos-card">
-    <div class="card-hdr" style="cursor:pointer" onclick="toggleCuadrePos()">
-      <div class="card-title"><span id="cp-arrow">&#9656;</span> Cuadre de posiciones contra DEGIRO</div>
-      <div style="font-size:11px;color:var(--muted)" id="cp-badge"></div>
-    </div>
-    <div id="an-cuadrepos"></div>
-  </div>
+
 </div>
 
 <!-- ══ AHORRO (tasa de ahorro puro + proyección) ═══════════════════════ -->
@@ -3813,22 +3829,24 @@ function load(){
       localStorage.setItem('dlv_mig_azvalor','1');
     }
   }catch(e){}
-  // v149 · Reparto de las valoraciones que ya tenías entre los brókers. Todo
-  // lo anterior venía de DEGIRO salvo lo que el importador marcó como xtb.
+  // v150 · Deshacer el reparto por bróker que hizo la v149, que se basaba en un
+  // src en el que no se podía confiar. Los apuntes que escribe la v149 en
+  // adelante llevan el bróker dentro del propio id ('bal_pf_<acción>_<bróker>_
+  // <fecha>'), así que los que tienen bróker pero no lo llevan en el id son
+  // justo los que estampó aquella migración: se les quita y vuelven a ser lo
+  // que eran, apuntes heredados sin bróker.
   try{
-    if(!localStorage.getItem('dlv_mig_brk')){
-      const bD=(cfg.brokers||[]).find(b=>/degiro/i.test(b.name||''))||(cfg.brokers||[])[0];
-      const bX=(cfg.brokers||[]).find(b=>/xtb/i.test(b.name||''));
-      let tocados=0;
+    if(!localStorage.getItem('dlv_mig_brk2')){
+      let deshechos=0;
       balanceLog.forEach(b=>{
-        if(b.refType!=='stock'||b.brk)return;
-        const d=(b.src==='xtb')?bX:( (b.src==='degiro'||b.src==='portfolio')?bD:null );
-        if(d){ b.brk=d.id; tocados++; }
+        if(b.refType!=='stock'||!b.brk)return;
+        if(String(b.id||'').indexOf(b.brk)<0){ delete b.brk; deshechos++; }
       });
-      if(tocados)save();
-      localStorage.setItem('dlv_mig_brk','1');
+      if(deshechos)save();
+      localStorage.setItem('dlv_mig_brk2','1');
+      localStorage.removeItem('dlv_mig_brk');
     }
-  }catch(e){console.warn('mig brk',e);}
+  }catch(e){console.warn('mig brk2',e);}
   // Remove phantom stocks left over from old versions (no ops, no value)
   try{const n=cleanupOrphanStocks();if(n>0){save();}}catch(e){console.warn('cleanup error',e);}
 }
@@ -3868,16 +3886,33 @@ const prevRec=()=>records.length>1?records[records.length-2]:null;
 // escrita a mano no lleva bróker: si es posterior a todas las de los brókers
 // se entiende que es el total y manda ella, que es lo que uno espera cuando
 // escribe una cifra a mano.
+// v150 · Aquí metí la pata en la v149 y el resultado fue Antin al +92%.
+// Las valoraciones viejas no dicen de qué bróker vienen: el importador escribía
+// src:'degiro' a pelo, viniera de donde viniera. Al repartirlas por ese src,
+// las de XTB acabaron en el saco de DEGIRO; después una importación de XTB
+// añadía su propio saco y la misma valoración se contaba DOS VECES —1.916,07
+// más 1.916,07 sobre 1.995,42 invertido son exactamente ese +92%.
+//
+// Ya no se adivina nada. Un apunte sin bróker que venga de una importación
+// vieja es historia: en cuanto la acción tiene aunque sea un saco con bróker
+// del mismo día o posterior, ese apunte heredado deja de contar. Un apunte
+// escrito a mano es otra cosa —lo escribiste tú— y si es el más reciente, manda
+// como total.
+const SRC_IMPORT=/^(degiro|xtb|portfolio)$/i;
 function stockPartes(stockId,hasta){
   const e=getBalanceEntries('stock',stockId).filter(x=>!hasta||(x.date||'')<=hasta);
   if(!e.length)return {total:null,partes:[],date:null};
   const grupos={};
   e.forEach(x=>{const k=x.brk||'';if(!grupos[k])grupos[k]=x;});   // ya vienen de más nueva a más vieja
   const conBrk=Object.keys(grupos).filter(k=>k);
-  const suelta=grupos[''];
+  let suelta=grupos[''];
   if(!conBrk.length)return {total:suelta.amount,partes:[{brk:'',name:'',amount:suelta.amount,date:suelta.date,src:suelta.src}],date:suelta.date};
   const masNueva=conBrk.reduce((d,k)=>(grupos[k].date>d?grupos[k].date:d),'');
-  if(suelta&&suelta.date>masNueva)   // cifra a mano posterior: es el total
+  const heredado=suelta&&SRC_IMPORT.test(String(suelta.src||''));
+  if(heredado&&suelta.date<=masNueva)suelta=null;    // ya lo sustituyen los sacos por bróker
+  if(suelta&&suelta.date>=masNueva&&!heredado)       // cifra a mano: es el total
+    return {total:suelta.amount,partes:[{brk:'',name:'a mano',amount:suelta.amount,date:suelta.date,src:suelta.src}],date:suelta.date,manual:true};
+  if(suelta&&suelta.date>masNueva)
     return {total:suelta.amount,partes:[{brk:'',name:'a mano',amount:suelta.amount,date:suelta.date,src:suelta.src}],date:suelta.date,manual:true};
   const partes=conBrk.map(k=>({brk:k,name:((cfg.brokers||[]).find(b=>b.id===k)||{}).name||'bróker',
                                amount:grupos[k].amount,date:grupos[k].date,src:grupos[k].src}))
@@ -7126,7 +7161,7 @@ function buildTradeOps(){
     const entry=buys.length?buys[0].date:(ops[0]&&ops[0].date)||null;
     const exit=sells.length?sells[sells.length-1].date:null;
     const isClosed=soldStocks.has(id)||rem<1e-6;
-    if(isClosed) closed.push({name:nameOf(id),entry,exit,invested:soldCB>0?soldCB:boughtCost,pnl:rz,idea:ideaOf(id),setup:setupOf(id),exitReason:exitOf(id)});
+    if(isClosed) closed.push({id,name:nameOf(id),entry,exit,invested:soldCB>0?soldCB:boughtCost,pnl:rz,idea:ideaOf(id),setup:setupOf(id),exitReason:exitOf(id)});
     else{ const val=getStockInfo(id).amount||0; const inv=boughtCost-soldCB;
       // v119 · para poder cuadrar contra DEGIRO hace falta saber de dónde sale
       // cada número: títulos, cada compra y la fecha y el origen de la valoración
@@ -7197,9 +7232,9 @@ function setAnScope(s){
   // toggle stock-only cards when viewing fondos
   // v135 · an-cuadrepos faltaba: la ficha seguía a la vista en la pantalla de
   // fondos, enseñando acciones, y ahí no se refresca nunca.
-  const stockOnly=['an-disposition','an-evol-chart','an-chart','an-rec-chart','an-closed','an-open','an-cuadrepos'];
+  const stockOnly=['an-disposition','an-evol-chart','an-chart','an-rec-chart','an-compras','an-closed','an-open','an-cuadrepos'];
   document.querySelectorAll('#panel-analisis .card').forEach(c=>{
-    const isStockCard=c.querySelector('#an-disposition,#an-evol-chart,#an-chart,#an-rec-chart,#an-closed,#an-open,#an-cuadrepos');
+    const isStockCard=c.querySelector('#an-disposition,#an-evol-chart,#an-chart,#an-rec-chart,#an-compras,#an-closed,#an-open,#an-cuadrepos');
     if(isStockCard) c.style.display=(s==='fondos')?'none':'';
   });
   renderAnalisis();
@@ -7606,6 +7641,7 @@ function renderAnalisisStocks(){
   // ── Chart: P/L per operation (closed solid, open translucent) ──
   renderAnalisisChart(closed,open);
   try{renderRecorridoChart(closed,open);}catch(e){console.warn('recorrido',e);}
+  try{renderAnalisisCompras();}catch(e){console.warn('compras',e);}
   renderAnalisisEvolution();
 
   // ── Registro de cierres (read-only table) ──
@@ -7985,13 +8021,26 @@ function setAnChartMode(m){
 // La reconstrucción solo ve lo que hay: si solo tienes valoraciones desde que
 // empezaste a importar carteras, el recorrido anterior no existe y la barra
 // sale corta. Por eso cada barra dice de cuántas valoraciones sale.
+// v151 · Las operaciones cerradas no salían aquí. Casi todas las tuyas se
+// vendieron antes de que empezaras a importar carteras, así que no tienen ni
+// una valoración intermedia guardada y el recorrido salía vacío. Pero dos
+// puntos sí se conocen siempre sin mirar ninguna valoración: el día que
+// compraste estabas en 0% y el día que vendiste acabaste donde acabaste. Con
+// eso la barra ya existe, y se dice claramente que de esa operación no hay
+// recorrido intermedio registrado: es lo que se sabe, ni más ni menos.
 function recorridoOperacion(o){
   const id=o.id||((cfg.stocks.find(s=>s.name===o.name)||{}).id);
   if(!id)return null;
   const desde=o.entry||'', hasta=o.exit||todayISO();
   const fechas=[...new Set(getBalanceEntries('stock',id)
     .map(x=>x.date).filter(d=>d&&d>=desde&&d<=hasta))].sort();
-  if(!fechas.length)return null;
+  const finPct=(o.invested>0)?((o.pnl||0)/o.invested*100):null;
+  if(!fechas.length){
+    if(finPct==null)return null;
+    return {maxPct:Math.max(0,finPct),minPct:Math.min(0,finPct),
+            maxEur:Math.max(0,o.pnl||0),minEur:Math.min(0,o.pnl||0),
+            n:0,desde:o.entry,hasta:o.exit||todayISO(),soloExtremos:true};
+  }
   const tx=transactions.filter(t=>t.stockId===id&&(t.type==='buy'||t.type==='sell'));
   let maxP=null,minP=null,maxE=null,minE=null;
   fechas.forEach(d=>{
@@ -8007,9 +8056,140 @@ function recorridoOperacion(o){
     if(maxP==null||pct>maxP){maxP=pct;maxE=eur;}
     if(minP==null||pct<minP){minP=pct;minE=eur;}
   });
+  // el punto de partida (0%) y el de llegada siempre cuentan
+  if(finPct!=null){
+    if(maxP==null||finPct>maxP){maxP=finPct;maxE=o.pnl||0;}
+    if(minP==null||finPct<minP){minP=finPct;minE=o.pnl||0;}
+  }
   if(maxP==null)return null;
+  if(maxP<0){maxP=0;maxE=0;}     // el día de la compra estabas en cero
+  if(minP>0){minP=0;minE=0;}
   return {maxPct:maxP,minPct:minP,maxEur:maxE,minEur:minE,n:fechas.length,
           desde:fechas[0],hasta:fechas[fechas.length-1]};
+}
+// ════════════════════════════════════════════════════════════════════
+// v151 · CADA COMPRA POR SEPARADO
+// ════════════════════════════════════════════════════════════════════
+// Una acción con varias compras no es una operación: son varias. Evonik es el
+// ejemplo — una compra que cerró perdiendo y otra que cerró ganando, y el
+// conjunto aparentando un empate que no cuenta nada de lo que pasó. Aquí cada
+// compra es una fila con su resultado, y las ventas se reparten por FIFO, que
+// además es el orden que exige Hacienda.
+//
+// Y la pregunta que hay detrás de promediar a la baja tiene respuesta exacta
+// sin necesidad de valoraciones guardadas: el precio al que compraste ESE día
+// es el precio de mercado de ese día. Comparado con el coste medio de lo que ya
+// tenías, sale cuánto perdía la posición justo cuando decidiste ampliarla.
+function lotesFIFO(stockId){
+  const txs=transactions.filter(t=>t.stockId===stockId&&(t.type==='buy'||t.type==='sell'))
+    .slice().sort((a,b)=>{
+      const d=(a.date||'').localeCompare(b.date||'');
+      if(d!==0)return d;
+      if(a.type!==b.type)return a.type==='buy'?-1:1;
+      return 0;
+    });
+  const lotes=[], vivos=[];
+  txs.forEach(t=>{
+    if(t.type==='buy'){
+      const sh=t.shares||0; if(sh<=0)return;
+      const cps=((t.total||0)+(t.costs||0))/sh;
+      // cómo estaba la posición JUSTO ANTES de esta compra
+      const shAntes=vivos.reduce((s,l)=>s+l.shares,0);
+      const cAntes=vivos.reduce((s,l)=>s+l.shares*l.cps,0);
+      const medioAntes=shAntes>0?cAntes/shAntes:null;
+      const L={date:t.date,shares:sh,shOrig:sh,cps,coste:sh*cps,vendidas:[],
+               shAntes,costeAntes:cAntes,medioAntes,
+               // el precio de esta compra contra tu coste medio de entonces
+               difMedio:medioAntes?((t.price||cps)/medioAntes-1)*100:null,
+               n:lotes.length+1};
+      lotes.push(L); vivos.push(L);
+    } else {
+      let q=t.shares||0;
+      const pps=q>0?(((t.total||0)-(t.costs||0))/q):0;   // neto por título
+      while(q>1e-9&&vivos.length){
+        const l=vivos[0], take=Math.min(q,l.shares);
+        l.vendidas.push({date:t.date,shares:take,pps,
+                         resultado:take*(pps-l.cps),motivo:t.exitReason||''});
+        l.shares-=take; q-=take;
+        if(l.shares<=1e-9)vivos.shift();
+      }
+    }
+  });
+  const agg=getStockAggregates()[stockId];
+  const vivasTotal=agg?agg.totalShares:0;
+  const precioHoy=(vivasTotal>1e-9&&agg&&agg.currentVal)?agg.currentVal/vivasTotal:null;
+  lotes.forEach(L=>{
+    L.realizado=L.vendidas.reduce((s,v)=>s+v.resultado,0);
+    L.vendidasSh=L.vendidas.reduce((s,v)=>s+v.shares,0);
+    L.abiertas=L.shares;
+    L.latente=(L.abiertas>1e-9&&precioHoy!=null)?L.abiertas*(precioHoy-L.cps):0;
+    L.total=L.realizado+L.latente;
+    L.pct=L.coste>0?(L.total/L.coste*100):null;
+    L.estado=L.abiertas<=1e-9?'cerrada':(L.vendidasSh>1e-9?'parcial':'abierta');
+    L.salida=L.vendidas.length?L.vendidas[L.vendidas.length-1].date:null;
+  });
+  return lotes;
+}
+function renderAnalisisCompras(){
+  const box=document.getElementById('an-compras');
+  if(!box)return;
+  const conVarias=cfg.stocks.filter(s=>{
+    const b=transactions.filter(t=>t.stockId===s.id&&t.type==='buy').length;
+    const v=transactions.filter(t=>t.stockId===s.id&&t.type==='sell').length;
+    return b>1||(b>=1&&v>0);
+  });
+  if(!conVarias.length){
+    box.innerHTML='<p style="font-size:11.5px;color:var(--muted)">Aquí aparecerán las acciones en las que hayas comprado más de una vez o hayas vendido algo. '+
+      'Con una sola compra sin ventas, la ficha de la posición ya lo dice todo.</p>';
+    return;
+  }
+  const eur=v=>(v>=0?'+':'')+fmt2(v)+'€';
+  const pc=v=>(v>=0?'+':'')+v.toFixed(1)+'%';
+  let h='';
+  conVarias.forEach(s=>{
+    const L=lotesFIFO(s.id); if(!L.length)return;
+    const tot=L.reduce((a,x)=>a+x.total,0), coste=L.reduce((a,x)=>a+x.coste,0);
+    const gan=L.filter(x=>x.total>0).length, per=L.filter(x=>x.total<0).length;
+    const bajadas=L.filter(x=>x.difMedio!=null&&x.difMedio<0);
+    h+='<div style="margin-bottom:.9rem;border:1px solid var(--border);border-radius:7px;padding:.55rem .6rem">'+
+      '<div style="display:flex;justify-content:space-between;gap:.5rem;align-items:baseline;flex-wrap:wrap">'+
+        '<strong style="font-size:12.5px">'+escapeHtml(s.name)+'</strong>'+
+        '<span style="font-size:12px" class="'+(tot>=0?'pos':'neg')+'">'+eur(tot)+' · '+(coste>0?pc(tot/coste*100):'—')+'</span></div>'+
+      '<div style="font-size:10.5px;color:var(--muted);margin-bottom:.35rem">'+L.length+' compra(s) · '+
+        gan+' en verde · '+per+' en rojo'+
+        (bajadas.length?(' · promediaste a la baja '+bajadas.length+' vez(ces)'):'')+
+        (gan&&per?' <span style="color:var(--amber)">— el conjunto esconde que unas ganan y otras pierden</span>':'')+
+      '</div>'+
+      '<div class="tbl-scroll" style="overflow-x:auto"><table class="detail-table" style="font-size:11px;min-width:560px">'+
+      '<thead><tr><th style="text-align:left">Compra</th><th>Títulos</th><th>Precio</th>'+
+      '<th>Al comprar</th><th>Estado</th><th>Resultado</th></tr></thead><tbody>';
+    L.forEach(x=>{
+      const alComprar=x.difMedio==null
+        ? '<span style="color:var(--faint)">primera</span>'
+        : '<span class="'+(x.difMedio<0?'neg':'pos')+'">'+pc(x.difMedio)+'</span>'+
+          '<div style="font-size:9px;color:var(--faint)">'+(x.difMedio<0?'por debajo':'por encima')+' de tu coste medio<br>'+
+          fmt(x.shAntes)+' tít. a '+fmt2(x.medioAntes)+'€</div>';
+      const estado=x.estado==='cerrada'
+        ? 'vendida<div style="font-size:9px;color:var(--faint)">'+(x.salida?fmtDate(x.salida):'')+'</div>'
+        : (x.estado==='parcial'
+            ? 'parcial<div style="font-size:9px;color:var(--faint)">quedan '+fmt(x.abiertas)+'</div>'
+            : 'abierta');
+      h+='<tr><td style="text-align:left">'+fmtDate(x.date)+
+        '<div style="font-size:9px;color:var(--faint)">'+fmt2(x.coste)+'€</div></td>'+
+        '<td>'+fmt(x.shOrig)+'</td><td>'+fmt2(x.cps)+'€</td>'+
+        '<td>'+alComprar+'</td><td>'+estado+'</td>'+
+        '<td style="font-weight:700" class="'+(x.total>=0?'pos':'neg')+'">'+eur(x.total)+
+        (x.pct!=null?'<div style="font-size:9px;font-weight:400">'+pc(x.pct)+'</div>':'')+
+        (x.realizado&&x.latente?'<div style="font-size:9px;color:var(--faint);font-weight:400">'+eur(x.realizado)+' cerrado · '+eur(x.latente)+' vivo</div>':'')+
+        '</td></tr>';
+    });
+    h+='</tbody></table></div></div>';
+  });
+  h+='<p style="font-size:10.5px;color:var(--muted)">Las ventas se reparten por FIFO: la primera venta cierra la primera compra, '+
+     'que es el orden que usa Hacienda. "Al comprar" compara el precio que pagaste ese día con el coste medio de lo que ya tenías: '+
+     'es lo que perdía tu posición justo cuando decidiste ampliarla.</p>';
+  box.innerHTML=h;
+  markScrollables(box);
 }
 let _anRecChart=null;
 function renderRecorridoChart(closed,open){
@@ -8060,6 +8240,9 @@ function renderRecorridoChart(closed,open){
           // si nunca estuvo en verde, decir "llegó a ganar −0,1%" sería absurdo
           const alto=x.r.maxPct>=0?('llegó a ganar '+q(x.r.maxPct)):('lo mejor que estuvo: '+q(x.r.maxPct));
           const bajo=x.r.minPct<=0?('llegó a perder '+q(x.r.minPct)):('lo peor que estuvo: '+q(x.r.minPct));
+          if(x.r.soloExtremos)return [(x.cerrada?'cerró en ':'ahora en ')+q((x.o.pnl||0)/x.o.invested*100)+' ('+e(x.o.pnl||0)+')',
+                  'sin valoraciones guardadas de ese periodo:',
+                  'solo se conoce el principio y el final'];
           return [alto+' ('+e(x.r.maxEur)+')',
                   bajo+' ('+e(x.r.minEur)+')',
                   (x.cerrada?'cerró en ':'ahora en ')+q((x.o.pnl||0)/x.o.invested*100)+' ('+e(x.o.pnl||0)+')',
@@ -8076,11 +8259,13 @@ function renderRecorridoChart(closed,open){
     }
   });
   if(box){
-    const pocas=ops.filter(x=>x.r.n<3).length;
+    const pocas=ops.filter(x=>x.r.n<3&&!x.r.soloExtremos).length;
+    const sinRec=ops.filter(x=>x.r.soloExtremos).length;
     box.innerHTML='La barra clara es el recorrido: desde lo máximo que llegó a perder hasta lo máximo que llegó a ganar. '+
       'El rombo es dónde acabó (o dónde está, si sigue abierta). Sale de las valoraciones guardadas, '+
       'así que solo ve lo que hubieras importado ese día.'+
-      (pocas?' <span style="color:var(--amber)">'+pocas+' operación(es) con menos de 3 valoraciones: su recorrido es casi una suposición.</span>':'');
+      (pocas?' <span style="color:var(--amber)">'+pocas+' operación(es) con menos de 3 valoraciones: su recorrido es casi una suposición.</span>':'')+
+      (sinRec?' <span style="color:var(--amber)">'+sinRec+' operación(es) cerradas antes de que empezaras a importar carteras: de esas solo se conoce el principio y el final, no el camino.</span>':'');
   }
 }
 function renderAnalisisChart(closed,open){
