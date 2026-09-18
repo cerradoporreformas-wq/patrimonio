@@ -610,7 +610,7 @@ nav::-webkit-scrollbar{display:none}
 <div class="topbar">
 <header>
   <div>
-    <div class="logo">Disfruta la Vida <small>· Patrimonio · v151</small></div>
+    <div class="logo">Disfruta la Vida <small>· Patrimonio · v152</small></div>
     <div style="font-size:10px;opacity:.5;margin-top:2px" id="hdr-date"></div>
   </div>
   <div class="hdr-right">
@@ -1534,6 +1534,10 @@ nav::-webkit-scrollbar{display:none}
 <div class="card">
     <div class="card-hdr"><div class="card-title">Recorrido de cada operación</div>
       <div style="font-size:11px;color:var(--muted)">cuánto llegó a ganar y a perder por el camino</div>
+    </div>
+    <div style="display:flex;gap:.4rem;margin-bottom:.5rem">
+      <button type="button" class="btn-xs an-rec-btn active" data-rec="accion" onclick="setRecModo('accion')">Por acción</button>
+      <button type="button" class="btn-xs an-rec-btn" data-rec="compra" onclick="setRecModo('compra')">Por compra</button>
     </div>
     <div style="position:relative;height:360px"><canvas id="an-rec-chart"></canvas></div>
     <div id="an-rec-note" style="font-size:10.5px;color:var(--muted);margin-top:.4rem"></div>
@@ -8130,6 +8134,48 @@ function lotesFIFO(stockId){
   });
   return lotes;
 }
+// v152 · El recorrido por COMPRA. Hasta ahora el máximo y el mínimo eran de la
+// posición entera, que con varias compras no dice nada: la de julio pudo estar
+// un 20% abajo mientras la de noviembre nunca vio el rojo, y las dos salían con
+// el mismo recorrido. La valoración guardada es del total de la posición, así
+// que se convierte a precio por título —valor entre títulos vivos ese día— y
+// ese precio se compara con el coste de CADA lote. El mismo dato, leído por
+// compra en vez de en bloque.
+function recorridoLotes(stockId){
+  const L=lotesFIFO(stockId);
+  if(!L.length)return L;
+  const hoy=todayISO();
+  const tx=transactions.filter(t=>t.stockId===stockId&&(t.type==='buy'||t.type==='sell'));
+  const vivasEn=d=>tx.reduce((s,t)=>(t.date||'')<=d
+    ? s+(t.type==='buy'?(t.shares||0):-(t.shares||0)) : s,0);
+  const serie=[...new Set(getBalanceEntries('stock',stockId).map(x=>x.date).filter(Boolean))]
+    .sort().map(d=>{
+      const tit=vivasEn(d), val=stockValor(stockId,d);
+      return (tit>1e-9&&val!=null)?{date:d,precio:val/tit}:null;
+    }).filter(Boolean);
+  L.forEach(x=>{
+    const fin=x.vendidas.length&&x.abiertas<=1e-9
+      ? x.vendidas[x.vendidas.length-1].date : hoy;
+    // títulos del lote vivos en cada fecha, para poder dar el euro exacto
+    const vivasLote=d=>x.shOrig-x.vendidas.reduce((s,v)=>s+((v.date||'')<=d?v.shares:0),0);
+    let maxP=0,minP=0,maxE=0,minE=0,nv=0;     // el día de la compra estabas en cero
+    serie.forEach(p=>{
+      if(p.date<x.date||p.date>fin)return;
+      const sh=vivasLote(p.date); if(sh<=1e-9)return;
+      const pct=(p.precio/x.cps-1)*100, eur=sh*(p.precio-x.cps);
+      nv++;
+      if(pct>maxP){maxP=pct;maxE=eur;}
+      if(pct<minP){minP=pct;minE=eur;}
+    });
+    // y el resultado final también es un punto del recorrido
+    if(x.pct!=null){
+      if(x.pct>maxP){maxP=x.pct;maxE=x.total;}
+      if(x.pct<minP){minP=x.pct;minE=x.total;}
+    }
+    x.r={maxPct:maxP,minPct:minP,maxEur:maxE,minEur:minE,n:nv,soloExtremos:nv===0};
+  });
+  return L;
+}
 function renderAnalisisCompras(){
   const box=document.getElementById('an-compras');
   if(!box)return;
@@ -8147,7 +8193,7 @@ function renderAnalisisCompras(){
   const pc=v=>(v>=0?'+':'')+v.toFixed(1)+'%';
   let h='';
   conVarias.forEach(s=>{
-    const L=lotesFIFO(s.id); if(!L.length)return;
+    const L=recorridoLotes(s.id); if(!L.length)return;
     const tot=L.reduce((a,x)=>a+x.total,0), coste=L.reduce((a,x)=>a+x.coste,0);
     const gan=L.filter(x=>x.total>0).length, per=L.filter(x=>x.total<0).length;
     const bajadas=L.filter(x=>x.difMedio!=null&&x.difMedio<0);
@@ -8162,7 +8208,7 @@ function renderAnalisisCompras(){
       '</div>'+
       '<div class="tbl-scroll" style="overflow-x:auto"><table class="detail-table" style="font-size:11px;min-width:560px">'+
       '<thead><tr><th style="text-align:left">Compra</th><th>Títulos</th><th>Precio</th>'+
-      '<th>Al comprar</th><th>Estado</th><th>Resultado</th></tr></thead><tbody>';
+      '<th>Al comprar</th><th>Estado</th><th>Recorrido</th><th>Resultado</th></tr></thead><tbody>';
     L.forEach(x=>{
       const alComprar=x.difMedio==null
         ? '<span style="color:var(--faint)">primera</span>'
@@ -8174,10 +8220,16 @@ function renderAnalisisCompras(){
         : (x.estado==='parcial'
             ? 'parcial<div style="font-size:9px;color:var(--faint)">quedan '+fmt(x.abiertas)+'</div>'
             : 'abierta');
+      const rec=!x.r?'—':(x.r.soloExtremos
+        ? '<span style="color:var(--faint)" title="no hay valoraciones guardadas mientras estuvo viva">sin datos</span>'
+        : '<span class="pos">'+pc(x.r.maxPct)+'</span> / <span class="neg">'+pc(x.r.minPct)+'</span>'+
+          '<div style="font-size:9px;color:var(--faint)">'+
+          (x.r.minPct>=-0.05?'nunca estuvo en rojo':'llegó a perder '+fmt2(Math.abs(x.r.minEur))+'€')+
+          ' · '+x.r.n+' val.</div>');
       h+='<tr><td style="text-align:left">'+fmtDate(x.date)+
         '<div style="font-size:9px;color:var(--faint)">'+fmt2(x.coste)+'€</div></td>'+
         '<td>'+fmt(x.shOrig)+'</td><td>'+fmt2(x.cps)+'€</td>'+
-        '<td>'+alComprar+'</td><td>'+estado+'</td>'+
+        '<td>'+alComprar+'</td><td>'+estado+'</td><td>'+rec+'</td>'+
         '<td style="font-weight:700" class="'+(x.total>=0?'pos':'neg')+'">'+eur(x.total)+
         (x.pct!=null?'<div style="font-size:9px;font-weight:400">'+pc(x.pct)+'</div>':'')+
         (x.realizado&&x.latente?'<div style="font-size:9px;color:var(--faint);font-weight:400">'+eur(x.realizado)+' cerrado · '+eur(x.latente)+' vivo</div>':'')+
@@ -8185,31 +8237,57 @@ function renderAnalisisCompras(){
     });
     h+='</tbody></table></div></div>';
   });
-  h+='<p style="font-size:10.5px;color:var(--muted)">Las ventas se reparten por FIFO: la primera venta cierra la primera compra, '+
+  h+='<p style="font-size:10.5px;color:var(--muted)">"Recorrido" es lo máximo y lo mínimo que llegó a estar <em>esa compra</em>, '+
+     'no la posición entera: la valoración guardada se convierte a precio por título y se compara con el coste de cada lote. '+
+     'Las ventas se reparten por FIFO: la primera venta cierra la primera compra, '+
      'que es el orden que usa Hacienda. "Al comprar" compara el precio que pagaste ese día con el coste medio de lo que ya tenías: '+
      'es lo que perdía tu posición justo cuando decidiste ampliarla.</p>';
   box.innerHTML=h;
   markScrollables(box);
 }
 let _anRecChart=null;
+let _anRecModo=(function(){try{return localStorage.getItem('dlv_anrec_modo')||'accion';}catch(e){return 'accion';}})();
+function setRecModo(m){
+  _anRecModo=m;
+  try{localStorage.setItem('dlv_anrec_modo',m);}catch(e){}
+  document.querySelectorAll('.an-rec-btn').forEach(b=>b.classList.toggle('active',b.dataset.rec===m));
+  if(_anLastOps)renderRecorridoChart(_anLastOps.closed,_anLastOps.open);
+}
+// Cada compra como una barra: mismo gráfico, lupa más fina.
+function opsPorCompra(){
+  const out=[];
+  (cfg.stocks||[]).forEach(s=>{
+    let L; try{L=recorridoLotes(s.id);}catch(e){return;}
+    (L||[]).forEach(x=>{
+      if(!(x.coste>0))return;
+      out.push({o:{id:s.id,name:s.name+' #'+x.n+' '+fmtDate(x.date),
+                   invested:x.coste,pnl:x.total},
+                cerrada:x.estado==='cerrada',sinSufijo:true,r:x.r});
+    });
+  });
+  return out;
+}
 function renderRecorridoChart(closed,open){
   const cv=document.getElementById('an-rec-chart');
   if(!cv||typeof Chart==='undefined')return;
+  document.querySelectorAll('.an-rec-btn').forEach(b=>b.classList.toggle('active',b.dataset.rec===_anRecModo));
   const pct=_anChartMode==='pct';
-  const ops=[...closed.map(o=>({o,cerrada:true})),...open.map(o=>({o,cerrada:false}))]
-    .map(x=>({...x,r:recorridoOperacion(x.o)}))
-    .filter(x=>x.r&&x.o.invested>0);
+  const ops=(_anRecModo==='compra')
+    ? opsPorCompra().filter(x=>x.r)
+    : [...closed.map(o=>({o,cerrada:true})),...open.map(o=>({o,cerrada:false}))]
+        .map(x=>({...x,r:recorridoOperacion(x.o)}))
+        .filter(x=>x.r&&x.o.invested>0);
   const box=document.getElementById('an-rec-note');
   if(!ops.length){
     if(_anRecChart){_anRecChart.destroy();_anRecChart=null;}
-    if(box)box.innerHTML='Todavía no hay valoraciones guardadas dentro del periodo de ninguna operación. '+
+    if(box)box.innerHTML='Todavía no hay nada que dibujar aquí. '+
       'Cada vez que importes una cartera se guarda una valoración con su fecha, y a partir de la segunda esto empieza a tener recorrido que enseñar.';
     return;
   }
   const val=(x,cual)=>pct?x.r[cual+'Pct']:x.r[cual+'Eur'];
   const fin=x=>pct?((x.o.pnl||0)/x.o.invested*100):(x.o.pnl||0);
   ops.sort((a,b)=>fin(a)-fin(b));
-  const labels=ops.map(x=>x.o.name+(x.cerrada?'':' (abierta)'));
+  const labels=ops.map(x=>x.o.name+((x.cerrada||x.sinSufijo)?'':' (abierta)'));
   // el recorrido real, de su peor momento a su mejor momento. Si una posición
   // nunca estuvo en verde, la barra no toca el cero y eso también se ve.
   const rango=ops.map(x=>{
@@ -8264,6 +8342,7 @@ function renderRecorridoChart(closed,open){
     box.innerHTML='La barra clara es el recorrido: desde lo máximo que llegó a perder hasta lo máximo que llegó a ganar. '+
       'El rombo es dónde acabó (o dónde está, si sigue abierta). Sale de las valoraciones guardadas, '+
       'así que solo ve lo que hubieras importado ese día.'+
+      (_anRecModo==='compra'?' <strong>Por compra:</strong> cada barra es una compra suelta, con las ventas repartidas por FIFO.':'')+
       (pocas?' <span style="color:var(--amber)">'+pocas+' operación(es) con menos de 3 valoraciones: su recorrido es casi una suposición.</span>':'')+
       (sinRec?' <span style="color:var(--amber)">'+sinRec+' operación(es) cerradas antes de que empezaras a importar carteras: de esas solo se conoce el principio y el final, no el camino.</span>':'');
   }
