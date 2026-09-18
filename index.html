@@ -610,7 +610,7 @@ nav::-webkit-scrollbar{display:none}
 <div class="topbar">
 <header>
   <div>
-    <div class="logo">Disfruta la Vida <small>· Patrimonio · v148</small></div>
+    <div class="logo">Disfruta la Vida <small>· Patrimonio · v149</small></div>
     <div style="font-size:10px;opacity:.5;margin-top:2px" id="hdr-date"></div>
   </div>
   <div class="hdr-right">
@@ -1560,6 +1560,13 @@ nav::-webkit-scrollbar{display:none}
     <div id="an-chart-note" style="font-size:10.5px;color:var(--muted);margin-top:.4rem"></div>
   </div>
   <div class="card">
+    <div class="card-hdr"><div class="card-title">Recorrido de cada operación</div>
+      <div style="font-size:11px;color:var(--muted)">cuánto llegó a ganar y a perder por el camino</div>
+    </div>
+    <div style="position:relative;height:360px"><canvas id="an-rec-chart"></canvas></div>
+    <div id="an-rec-note" style="font-size:10.5px;color:var(--muted);margin-top:.4rem"></div>
+  </div>
+  <div class="card">
     <div class="card-hdr"><div class="card-title">Registro de cierres</div></div>
     <div id="an-closed"></div>
   </div>
@@ -2099,8 +2106,8 @@ function getBrokerLiquidityAsOf(year,month){
 function getStockInfo(stockId){
   // Prefer date-stamped balance log
   if(typeof balanceLog!=='undefined'){
-    const e=balUltimo('stock',stockId);
-    if(e) return {amount:e.amount,date:e.date,source:'log'};
+    const p=stockPartes(stockId);
+    if(p.total!=null) return {amount:p.total,date:p.date,source:'log',partes:p.partes};
   }
   // Latest record with a value for this stock
   for(let i=records.length-1;i>=0;i--){
@@ -3806,6 +3813,22 @@ function load(){
       localStorage.setItem('dlv_mig_azvalor','1');
     }
   }catch(e){}
+  // v149 · Reparto de las valoraciones que ya tenías entre los brókers. Todo
+  // lo anterior venía de DEGIRO salvo lo que el importador marcó como xtb.
+  try{
+    if(!localStorage.getItem('dlv_mig_brk')){
+      const bD=(cfg.brokers||[]).find(b=>/degiro/i.test(b.name||''))||(cfg.brokers||[])[0];
+      const bX=(cfg.brokers||[]).find(b=>/xtb/i.test(b.name||''));
+      let tocados=0;
+      balanceLog.forEach(b=>{
+        if(b.refType!=='stock'||b.brk)return;
+        const d=(b.src==='xtb')?bX:( (b.src==='degiro'||b.src==='portfolio')?bD:null );
+        if(d){ b.brk=d.id; tocados++; }
+      });
+      if(tocados)save();
+      localStorage.setItem('dlv_mig_brk','1');
+    }
+  }catch(e){console.warn('mig brk',e);}
   // Remove phantom stocks left over from old versions (no ops, no value)
   try{const n=cleanupOrphanStocks();if(n>0){save();}}catch(e){console.warn('cleanup error',e);}
 }
@@ -3831,6 +3854,37 @@ const prevRec=()=>records.length>1?records[records.length-2]:null;
 // en JavaScript, así que a igualdad de fecha se quedaba arriba el primero que
 // se insertó: corregías el saldo de hoy, se guardaba bien, y la app seguía
 // enseñando el de antes. Ahora, a igual fecha, manda el último registrado.
+// ════════════════════════════════════════════════════════════════════
+// v149 · LA MISMA ACCIÓN EN VARIOS BRÓKERS
+// ════════════════════════════════════════════════════════════════════
+// Hasta aquí una acción tenía UNA valoración por fecha. Con Ibstock en DEGIRO
+// y en XTB eso se rompía sin avisar: importabas DEGIRO y quedaban 1.294,73€,
+// importabas XTB y el mismo apunte se sobrescribía con 967,90€. No se sumaban:
+// el segundo borraba al primero, y el patrimonio salía 1.294,73€ corto con
+// toda la pinta de estar bien.
+//
+// Ahora cada valoración lleva el bróker del que viene (brk) y el valor de la
+// acción es la SUMA de la última valoración de cada bróker. Una valoración
+// escrita a mano no lleva bróker: si es posterior a todas las de los brókers
+// se entiende que es el total y manda ella, que es lo que uno espera cuando
+// escribe una cifra a mano.
+function stockPartes(stockId,hasta){
+  const e=getBalanceEntries('stock',stockId).filter(x=>!hasta||(x.date||'')<=hasta);
+  if(!e.length)return {total:null,partes:[],date:null};
+  const grupos={};
+  e.forEach(x=>{const k=x.brk||'';if(!grupos[k])grupos[k]=x;});   // ya vienen de más nueva a más vieja
+  const conBrk=Object.keys(grupos).filter(k=>k);
+  const suelta=grupos[''];
+  if(!conBrk.length)return {total:suelta.amount,partes:[{brk:'',name:'',amount:suelta.amount,date:suelta.date,src:suelta.src}],date:suelta.date};
+  const masNueva=conBrk.reduce((d,k)=>(grupos[k].date>d?grupos[k].date:d),'');
+  if(suelta&&suelta.date>masNueva)   // cifra a mano posterior: es el total
+    return {total:suelta.amount,partes:[{brk:'',name:'a mano',amount:suelta.amount,date:suelta.date,src:suelta.src}],date:suelta.date,manual:true};
+  const partes=conBrk.map(k=>({brk:k,name:((cfg.brokers||[]).find(b=>b.id===k)||{}).name||'bróker',
+                               amount:grupos[k].amount,date:grupos[k].date,src:grupos[k].src}))
+                     .sort((a,b)=>b.amount-a.amount);
+  return {total:partes.reduce((s,x)=>s+(x.amount||0),0),partes,date:masNueva};
+}
+function stockValor(stockId,hasta){ const p=stockPartes(stockId,hasta); return p.total; }
 function getBalanceEntries(refType,refId){
   const out=[];
   balanceLog.forEach((e,i)=>{if(e.refType===refType&&e.refId===refId)out.push([e,i]);});
@@ -3843,6 +3897,7 @@ function getLatestBalance(refType,refId){
 }
 function getBalanceAsOf(refType,refId,year,month){
   const end=year+'-'+String(month).padStart(2,'0')+'-31';
+  if(refType==='stock')return stockValor(refId,end);    // v149 · suma de brókers
   const e=getBalanceEntries(refType,refId).filter(x=>(x.date||'')<=end); // v110 · mismo desempate
   return e.length?e[0].amount:null;
 }
@@ -7076,10 +7131,11 @@ function buildTradeOps(){
       // v119 · para poder cuadrar contra DEGIRO hace falta saber de dónde sale
       // cada número: títulos, cada compra y la fecha y el origen de la valoración
       const vb=balUltimo('stock',id);
+      const pp=stockPartes(id);
       open.push({id,name:nameOf(id),entry,invested:inv,value:val,pnl:val-inv,
         idea:ideaOf(id),setup:setupOf(id),
-        shares:rem,buys,sells,
-        valDate:vb?vb.date:null, valSrc:vb?(vb.src||'a mano'):'—'}); }
+        shares:rem,buys,sells,partes:pp.partes,
+        valDate:pp.date||(vb?vb.date:null), valSrc:vb?(vb.src||'a mano'):'—'}); }
   });
   const flows=[];
   tx.forEach(t=>{if(!t.date)return;const idea=ideaOf(t.stockId);
@@ -7141,9 +7197,9 @@ function setAnScope(s){
   // toggle stock-only cards when viewing fondos
   // v135 · an-cuadrepos faltaba: la ficha seguía a la vista en la pantalla de
   // fondos, enseñando acciones, y ahí no se refresca nunca.
-  const stockOnly=['an-disposition','an-evol-chart','an-chart','an-closed','an-open','an-cuadrepos'];
+  const stockOnly=['an-disposition','an-evol-chart','an-chart','an-rec-chart','an-closed','an-open','an-cuadrepos'];
   document.querySelectorAll('#panel-analisis .card').forEach(c=>{
-    const isStockCard=c.querySelector('#an-disposition,#an-evol-chart,#an-chart,#an-closed,#an-open,#an-cuadrepos');
+    const isStockCard=c.querySelector('#an-disposition,#an-evol-chart,#an-chart,#an-rec-chart,#an-closed,#an-open,#an-cuadrepos');
     if(isStockCard) c.style.display=(s==='fondos')?'none':'';
   });
   renderAnalisis();
@@ -7549,6 +7605,7 @@ function renderAnalisisStocks(){
 
   // ── Chart: P/L per operation (closed solid, open translucent) ──
   renderAnalisisChart(closed,open);
+  try{renderRecorridoChart(closed,open);}catch(e){console.warn('recorrido',e);}
   renderAnalisisEvolution();
 
   // ── Registro de cierres (read-only table) ──
@@ -7876,7 +7933,9 @@ function renderCuadrePos(open){
       '<td>'+fmt2(o.invested)+'€</td>'+
       '<td class="cp-x">'+fmt2(pm)+'€</td>'+
       '<td>'+fmt2(o.value)+'€<div style="font-size:9px;color:var(--faint)">'+
-        (o.valDate?fmtDate(o.valDate)+' · '+escapeHtml(String(o.valSrc)):'sin fecha')+'</div></td>'+
+        (o.partes&&o.partes.length>1
+          ? o.partes.map(x=>escapeHtml(x.name)+' '+fmt2(x.amount)+'€').join(' + ')
+          : (o.valDate?fmtDate(o.valDate)+' · '+escapeHtml(String(o.valSrc)):'sin fecha'))+'</div></td>'+
       '<td style="font-weight:700" class="'+(o.pnl>=0?'pos':'neg')+'">'+(o.pnl>=0?'+':'')+fmt2(o.pnl)+'€</td>'+
       '<td><input type="text" inputmode="decimal" data-id="'+o.id+'" oninput="cuadrePosMio(this)" '+
         'value="'+(_cpMio[o.id]!=null?String(_cpMio[o.id]).replace('.',','):'')+'" placeholder="—" '+
@@ -7911,7 +7970,118 @@ function setAnChartMode(m){
   _anChartMode=m;
   try{localStorage.setItem('dlv_anchart_mode',m);}catch(e){}
   document.querySelectorAll('.an-chart-btn').forEach(b=>b.classList.toggle('active',b.dataset.mode===m));
-  if(_anLastOps)renderAnalisisChart(_anLastOps.closed,_anLastOps.open);
+  if(_anLastOps){renderAnalisisChart(_anLastOps.closed,_anLastOps.open);
+    try{renderRecorridoChart(_anLastOps.closed,_anLastOps.open);}catch(e){console.warn('recorrido',e);}}
+}
+// ════════════════════════════════════════════════════════════════════
+// v149 · HASTA DÓNDE LLEGÓ CADA OPERACIÓN
+// ════════════════════════════════════════════════════════════════════
+// El resultado final de una operación esconde por dónde ha pasado. Una que
+// acaba en +2% pero llegó a estar en −35% no es la misma operación que una que
+// nunca bajó del 0, aunque en el gráfico de resultado se vean iguales. Esto
+// reconstruye, con las valoraciones que tienes guardadas, cuánto llegó a ganar
+// y cuánto llegó a perder cada posición mientras la tuviste.
+//
+// La reconstrucción solo ve lo que hay: si solo tienes valoraciones desde que
+// empezaste a importar carteras, el recorrido anterior no existe y la barra
+// sale corta. Por eso cada barra dice de cuántas valoraciones sale.
+function recorridoOperacion(o){
+  const id=o.id||((cfg.stocks.find(s=>s.name===o.name)||{}).id);
+  if(!id)return null;
+  const desde=o.entry||'', hasta=o.exit||todayISO();
+  const fechas=[...new Set(getBalanceEntries('stock',id)
+    .map(x=>x.date).filter(d=>d&&d>=desde&&d<=hasta))].sort();
+  if(!fechas.length)return null;
+  const tx=transactions.filter(t=>t.stockId===id&&(t.type==='buy'||t.type==='sell'));
+  let maxP=null,minP=null,maxE=null,minE=null;
+  fechas.forEach(d=>{
+    // lo invertido vivo a esa fecha: compras menos el coste de lo ya vendido
+    let inv=0;
+    tx.forEach(t=>{ if((t.date||'')>d)return;
+      if(t.type==='buy')inv+=(t.total||0)+(t.costs||0);
+      else inv-=(t.costBasis||0); });
+    if(inv<=0)return;
+    const v=stockValor(id,d);
+    if(v==null)return;
+    const eur=v-inv, pct=eur/inv*100;
+    if(maxP==null||pct>maxP){maxP=pct;maxE=eur;}
+    if(minP==null||pct<minP){minP=pct;minE=eur;}
+  });
+  if(maxP==null)return null;
+  return {maxPct:maxP,minPct:minP,maxEur:maxE,minEur:minE,n:fechas.length,
+          desde:fechas[0],hasta:fechas[fechas.length-1]};
+}
+let _anRecChart=null;
+function renderRecorridoChart(closed,open){
+  const cv=document.getElementById('an-rec-chart');
+  if(!cv||typeof Chart==='undefined')return;
+  const pct=_anChartMode==='pct';
+  const ops=[...closed.map(o=>({o,cerrada:true})),...open.map(o=>({o,cerrada:false}))]
+    .map(x=>({...x,r:recorridoOperacion(x.o)}))
+    .filter(x=>x.r&&x.o.invested>0);
+  const box=document.getElementById('an-rec-note');
+  if(!ops.length){
+    if(_anRecChart){_anRecChart.destroy();_anRecChart=null;}
+    if(box)box.innerHTML='Todavía no hay valoraciones guardadas dentro del periodo de ninguna operación. '+
+      'Cada vez que importes una cartera se guarda una valoración con su fecha, y a partir de la segunda esto empieza a tener recorrido que enseñar.';
+    return;
+  }
+  const val=(x,cual)=>pct?x.r[cual+'Pct']:x.r[cual+'Eur'];
+  const fin=x=>pct?((x.o.pnl||0)/x.o.invested*100):(x.o.pnl||0);
+  ops.sort((a,b)=>fin(a)-fin(b));
+  const labels=ops.map(x=>x.o.name+(x.cerrada?'':' (abierta)'));
+  // el recorrido real, de su peor momento a su mejor momento. Si una posición
+  // nunca estuvo en verde, la barra no toca el cero y eso también se ve.
+  const rango=ops.map(x=>{
+    let a=val(x,'min'), b=val(x,'max');
+    if(Math.abs(b-a)<1e-9){a=Math.min(a,0);b=Math.max(b,0);}   // una sola valoración: que se vea algo
+    return [a,b];
+  });
+  const colores=ops.map(x=>x.cerrada?'rgba(90,106,128,.22)':'rgba(90,106,128,.13)');
+  const puntos=ops.map((x,i)=>({x:fin(x),y:i}));
+  const colFin=ops.map(x=>fin(x)>=0?'#1A7A3A':'#B03020');
+  if(_anRecChart)_anRecChart.destroy();
+  const dark=document.body.classList.contains('dark');
+  const wrap=cv.parentElement;
+  if(wrap)wrap.style.height=Math.max(280,labels.length*26+70)+'px';
+  _anRecChart=new Chart(cv,{
+    data:{labels,datasets:[
+      {type:'bar',data:rango,backgroundColor:colores,borderWidth:0,order:2},
+      {type:'scatter',data:puntos,backgroundColor:colFin,borderColor:colFin,
+       pointRadius:5,pointStyle:'rectRot',order:1}
+    ]},
+    options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false},tooltip:{callbacks:{
+        title:i=>labels[i[0].dataIndex],
+        label:c=>{
+          const x=ops[c.dataIndex]; if(!x)return '';
+          const e=n=>(n>=0?'+':'')+fmt2(n)+'€';
+          const q=n=>(n>=0?'+':'')+n.toFixed(1)+'%';
+          // si nunca estuvo en verde, decir "llegó a ganar −0,1%" sería absurdo
+          const alto=x.r.maxPct>=0?('llegó a ganar '+q(x.r.maxPct)):('lo mejor que estuvo: '+q(x.r.maxPct));
+          const bajo=x.r.minPct<=0?('llegó a perder '+q(x.r.minPct)):('lo peor que estuvo: '+q(x.r.minPct));
+          return [alto+' ('+e(x.r.maxEur)+')',
+                  bajo+' ('+e(x.r.minEur)+')',
+                  (x.cerrada?'cerró en ':'ahora en ')+q((x.o.pnl||0)/x.o.invested*100)+' ('+e(x.o.pnl||0)+')',
+                  'sobre '+x.r.n+' valoración(es) desde '+fmtDate(x.r.desde)];
+        }}}},
+      scales:{
+        x:{grid:{color:dark?'rgba(255,255,255,.08)':'rgba(0,0,0,.05)'},
+           ticks:{color:dark?'#A0AEC0':'#8A97AB',font:{size:10},
+                  callback:v=>pct?(v.toFixed(0)+'%'):(fmt(v)+'€')}},
+        y:{type:'category',grid:{display:false},
+           ticks:{color:dark?'#A0AEC0':'#5A6A80',font:{size:10.5},autoSkip:false,maxRotation:0,
+                  callback:function(v){const t=this.getLabelForValue(v);return t&&t.length>30?t.slice(0,29)+'…':t;}}}
+      }
+    }
+  });
+  if(box){
+    const pocas=ops.filter(x=>x.r.n<3).length;
+    box.innerHTML='La barra clara es el recorrido: desde lo máximo que llegó a perder hasta lo máximo que llegó a ganar. '+
+      'El rombo es dónde acabó (o dónde está, si sigue abierta). Sale de las valoraciones guardadas, '+
+      'así que solo ve lo que hubieras importado ese día.'+
+      (pocas?' <span style="color:var(--amber)">'+pocas+' operación(es) con menos de 3 valoraciones: su recorrido es casi una suposición.</span>':'');
+  }
 }
 function renderAnalisisChart(closed,open){
   const cv=document.getElementById('an-chart');
@@ -11519,15 +11689,29 @@ function degiroCommit(){
   const hacerOps=opsX.length&&document.getElementById('dg-ops')?.checked;
   if(!guardedAction('importar posiciones de '+brokerNombreFuente(P.fuente)+' de '+date))return;
   let act=0,nue=0,isins=0,ticks=0,nOps=0,nAccOps=0;
+  // el bróker se resuelve aquí arriba porque de él depende dónde va cada
+  // valoración, no solo la liquidez
+  let bk=null, flujos=0;
+  {
+    const sel=(P.brokerSel===undefined?'':P.brokerSel);
+    if(sel==='__nuevo__'){
+      bk={id:'brk_'+Date.now(),name:brokerNombreFuente(P.fuente)};
+      cfg.brokers=cfg.brokers||[]; cfg.brokers.push(bk);
+    } else if(sel){ bk=(cfg.brokers||[]).find(b=>b.id===sel)||null; }
+  }
   // Primero las compras y ventas: crean la acción, y así la valoración de la
   // hoja de posiciones abiertas ya tiene con qué emparejarse.
   if(hacerOps){ const r=xtbAplicarOps(opsX); nOps=r.creadas; nAccOps=r.acciones; }
   const plan=hacerOps?degiroPlan(P.parsed,date):P.plan;
   const crear=plan.nuevas.filter(r=>crearNombres.has(r.prod));
+  // v149 · la valoración se guarda por bróker: dos carteras del mismo día ya no
+  // se pisan, se suman. El apunte se busca por (acción + fecha + bróker).
   const ponerBal=(stockId,amount)=>{
-    const i=balanceLog.findIndex(b=>b.refType==='stock'&&b.refId===stockId&&b.date===date);
-    if(i>=0) balanceLog[i].amount=amount;
-    else balanceLog.push({id:'bal_pf_'+stockId+'_'+date.replace(/-/g,''),refType:'stock',refId:stockId,date,amount,src:'degiro'});
+    const brk=bk?bk.id:'';
+    const i=balanceLog.findIndex(b=>b.refType==='stock'&&b.refId===stockId&&b.date===date&&(b.brk||'')===brk);
+    if(i>=0){ balanceLog[i].amount=amount; balanceLog[i].src=P.fuente; }
+    else balanceLog.push({id:'bal_pf_'+stockId+'_'+(brk||'x')+'_'+date.replace(/-/g,''),
+      refType:'stock',refId:stockId,date,amount,src:P.fuente,brk});
   };
   plan.upd.forEach(u=>{
     if(u.ponIsin){u.stk.isin=u.ponIsin;isins++;}   // se cura solo: la próxima ya empareja por ISIN
@@ -11541,12 +11725,6 @@ function degiroCommit(){
     cfg.stocks.push(stk); ponerBal(stk.id,r.eur); nue++;
   });
   // ─── Liquidez: al bróker que hayas elegido, no siempre al primero ──
-  let bk=null, flujos=0;
-  const sel=(P.brokerSel===undefined?'':P.brokerSel);
-  if(sel==='__nuevo__'){
-    bk={id:'brk_'+Date.now(),name:brokerNombreFuente(P.fuente)};
-    cfg.brokers=cfg.brokers||[]; cfg.brokers.push(bk);
-  } else if(sel){ bk=(cfg.brokers||[]).find(b=>b.id===sel)||null; }
   const efectivo=(P.cash!=null&&isFinite(P.cash))?Math.round(P.cash*100)/100:null;
   if(bk&&efectivo!=null){
     const i=balanceLog.findIndex(b=>b.refType==='broker'&&b.refId===bk.id&&b.date===date);
@@ -12462,13 +12640,19 @@ function dgTxAplicar(cambian){
     }else if(!s.isin&&p.isin){ s.isin=p.isin; }
     const ops=p.ops.slice().sort((a,b)=>a.date.localeCompare(b.date));
     const ordenes=new Set(ops.map(o=>o.orden));
+    // v149 · Una orden de DEGIRO puede ejecutarse en varios trozos, y todos
+    // llevan el MISMO número de orden: tus 1.454 títulos de Ibstock son dos
+    // ejecuciones de 727. Emparejar solo por número de orden se comía la
+    // segunda y te dejaba con la mitad de los títulos. Cada apunte que ya
+    // tienes solo puede emparejarse con UNA operación del archivo.
+    const usados=new Set();
     ops.forEach((o,i)=>{
-      // por número de orden si lo hay y, si no, por fecha + títulos + tipo,
-      // que es lo que permite reconocer una operación que anotaste a mano
-      const rep=transactions.find(t=>t.stockId===s.id&&(
-        (o.orden&&t.orden===o.orden) ||
+      const rep=transactions.find(t=>!usados.has(t.id)&&t.stockId===s.id&&(
+        (o.orden&&t.orden===o.orden&&t.type===o.tipo&&t.date===o.date&&Math.abs((t.shares||0)-o.n)<0.001) ||
+        (o.orden&&t.orden===o.orden&&!(t.shares>0)) ||
         (t.type===o.tipo&&t.date===o.date&&Math.abs((t.shares||0)-o.n)<0.001)));
       if(rep){
+        usados.add(rep.id);
         if(!rep.orden&&o.orden)rep.orden=o.orden;     // queda identificada para la próxima
         yaEstaban++; return;
       }
