@@ -610,7 +610,7 @@ nav::-webkit-scrollbar{display:none}
 <div class="topbar">
 <header>
   <div>
-    <div class="logo">Disfruta la Vida <small>· Patrimonio · v152</small></div>
+    <div class="logo">Disfruta la Vida <small>· Patrimonio · v153</small></div>
     <div style="font-size:10px;opacity:.5;margin-top:2px" id="hdr-date"></div>
   </div>
   <div class="hdr-right">
@@ -1768,6 +1768,12 @@ nav::-webkit-scrollbar{display:none}
     </div>
     <div class="tbl-scroll"><table class="detail-table" id="puestos-tabla" style="font-size:11.5px;width:100%"></table></div>
     <div id="puestos-detalle" style="margin-top:.8rem"></div>
+  </div>
+  <div class="card">
+    <div class="card-hdr"><div class="card-title">Lo que has ganado de verdad</div>
+      <div style="font-size:11px;color:var(--muted)">de tus nóminas, no del puesto — esta es la cifra que sale en la renta</div>
+    </div>
+    <div id="bruto-real"></div>
   </div>
 </div>
 
@@ -8530,6 +8536,108 @@ function puestoNeto(p,opt){
     tipo:brutoTotal>0?F.cuota/brutoTotal:0};
 }
 
+// ════════════════════════════════════════════════════════════════════
+// v153 · EL BRUTO DEL PUESTO NO ES EL BRUTO DE TU RENTA
+// ════════════════════════════════════════════════════════════════════
+// La tabla de puestos calcula lo que da un puesto en régimen normal: doce
+// mensualidades iguales, dos extras y la productividad. Nunca va a cuadrar con
+// la renta, y no porque esté mal: es que mide otra cosa. Un año real lleva
+// atrasos, regularizaciones, un cambio de grupo a mitad de año, una sentencia.
+// Tu 2025 es justo eso — empezaste el año como C2 y cobraste los atrasos del
+// C1 después.
+//
+// Como las nóminas están guardadas una a una, el bruto real de cada año se
+// puede sumar de verdad, y con el IPT al lado sale exactamente la casilla de
+// la renta. Eso es lo que hace esta tarjeta: no estima nada.
+function brutoRealAnios(){
+  const H=NOM_HIST(), por={};
+  H.forEach(x=>{
+    const y=String(x.ym||x.date||'').slice(0,4); if(!/^\d{4}$/.test(y))return;
+    const nd=x.nd||{};
+    const P=por[y]||(por[y]={anio:y,sueldo:0,ipt:0,nominas:0,ded:0,extras:0});
+    P.sueldo+=Number(nd.total_dev)||0;
+    P.ded+=Number(nd.total_ded)||0;
+    P.nominas++;
+    (nd.devengos||[]).forEach(dv=>{
+      if(/atras|regulariz|sentencia/i.test(dv.name||''))P.extras+=Number(dv.amount)||0;
+    });
+  });
+  (typeof incomeLog!=='undefined'?incomeLog:[]).forEach(x=>{
+    if(x.cat!=='ipt')return;
+    const y=String(x.date||'').slice(0,4); if(!por[y])return;
+    por[y].ipt+=Number(x.amt)||0;
+  });
+  return Object.values(por).sort((a,b)=>b.anio.localeCompare(a.anio))
+    .map(P=>({...P,total:P.sueldo+P.ipt}));
+}
+// La productividad variable cambia de un año a otro y la tabla de puestos la
+// lleva escrita a mano. Si la nómina dice otra cosa, más vale enterarse.
+function prodRealUltimoAnio(){
+  const H=NOM_HIST(); let mejor=null;
+  H.forEach(x=>{
+    (x.nd&&x.nd.devengos||[]).forEach(d=>{
+      if(!/^productividad$/i.test(String(d.name||'').trim()))return;
+      const y=String(x.ym||'').slice(0,4);
+      if(!mejor||y>mejor.anio)mejor={anio:y,importe:Number(d.amount)||0};
+    });
+  });
+  return mejor;
+}
+function aplicarProdReal(){
+  const r=prodRealUltimoAnio(); if(!r)return;
+  setPuestoCfg('prodExtraAnio',r.importe);
+  toast('Productividad variable actualizada a '+fmt2(r.importe)+'€');
+  renderPuestos(); renderBrutoReal();
+}
+function renderBrutoReal(){
+  const box=document.getElementById('bruto-real'); if(!box)return;
+  const A=brutoRealAnios();
+  if(!A.length){ box.innerHTML='<p style="font-size:11.5px;color:var(--muted)">Cuando subas nóminas aparecerá aquí el bruto real de cada año.</p>'; return; }
+  const c=puestosCfg(), pc=pensionCfg();
+  const propio=(c.lista||[]).find(x=>x.propio);
+  const teor=propio?puestoBruto(propio).anual:null;
+  const iptAnio=(Number(pc.iptMes)||0)*(Number(pc.iptPagas)||14);
+  let h='<div class="tbl-scroll" style="overflow-x:auto"><table class="detail-table" style="font-size:11.5px;min-width:520px">'+
+    '<thead><tr><th style="text-align:left">Año</th><th>Sueldo bruto</th><th>IPT</th><th>Bruto total</th><th>Nóminas</th><th>De las cuales atrasos</th></tr></thead><tbody>';
+  A.forEach(P=>{
+    const completo=P.nominas>=12;
+    h+='<tr><td style="text-align:left"><strong>'+P.anio+'</strong>'+
+      (completo?'':'<div style="font-size:9px;color:var(--amber)">año incompleto</div>')+'</td>'+
+      '<td>'+fmt2(P.sueldo)+'€</td>'+
+      '<td>'+(P.ipt?fmt2(P.ipt)+'€':'<span style="color:var(--faint)">—</span>')+'</td>'+
+      '<td style="font-weight:700">'+fmt2(P.total)+'€</td>'+
+      '<td>'+P.nominas+'</td>'+
+      '<td>'+(P.extras?fmt2(P.extras)+'€':'<span style="color:var(--faint)">—</span>')+'</td></tr>';
+  });
+  h+='</tbody></table></div>';
+  if(teor!=null){
+    const ult=A.find(x=>x.nominas>=12)||A[0];
+    const teorTotal=teor+iptAnio;
+    const dif=ult.total-teorTotal;
+    h+='<div style="margin-top:.6rem;padding:.5rem .6rem;border:1px solid var(--border);border-radius:6px;font-size:11.5px;line-height:1.5">'+
+      '<strong>Por qué no cuadra con la tabla de puestos.</strong><br>'+
+      'Tu puesto («'+escapeHtml(propio.nombre)+'») da <strong>'+fmt2(teor)+'€</strong> de sueldo en un año normal, '+
+      'más <strong>'+fmt2(iptAnio)+'€</strong> de IPT al ritmo de hoy: <strong>'+fmt2(teorTotal)+'€</strong>.<br>'+
+      'En '+ult.anio+' cobraste <strong>'+fmt2(ult.total)+'€</strong>, '+
+      '<span class="'+(dif>=0?'pos':'neg')+'">'+(dif>=0?'+':'')+fmt2(dif)+'€</span> de diferencia. '+
+      (ult.extras?('De esa diferencia, <strong>'+fmt2(ult.extras)+'€</strong> son atrasos y regularizaciones que solo se cobran una vez. '):'')+
+      'El resto es que el IPT se revaloriza cada año y que un año real no son doce mensualidades iguales.<br>'+
+      '<span style="color:var(--muted);font-size:10.5px">La tabla de puestos sirve para comparar puestos entre sí. Para cuadrar con Hacienda, la cifra es la de arriba.</span>'+
+    '</div>';
+  }
+  const pr=prodRealUltimoAnio();
+  if(pr&&Math.abs(pr.importe-(Number(c.prodExtraAnio)||0))>1){
+    h+='<div style="margin-top:.5rem;padding:.45rem .6rem;border:1px solid var(--amber);border-radius:6px;font-size:11px">'+
+      '<strong style="color:var(--amber)">La productividad de la tabla está desfasada.</strong> '+
+      'En la tabla de puestos hay '+fmt2(Number(c.prodExtraAnio)||0)+'€, pero tu nómina de '+pr.anio+
+      ' pagó <strong>'+fmt2(pr.importe)+'€</strong>. Todos los puestos salen '+
+      fmt2(Math.abs(pr.importe-(Number(c.prodExtraAnio)||0)))+'€ '+(pr.importe>(Number(c.prodExtraAnio)||0)?'por debajo':'por encima')+' de lo real. '+
+      '<button type="button" class="btn-xs" onclick="aplicarProdReal()">Usar '+fmt2(pr.importe)+'€</button></div>';
+  }
+  box.innerHTML=h;
+  markScrollables(box);
+}
+
 let _puestoMode='ipt', _puestoPer='mes', _puestosChart=null;
 function setPuestoMode(m){_puestoMode=m;}
 function setPuestoPer(p){_puestoPer=p;document.querySelectorAll('.puesto-per-btn').forEach(b=>b.classList.toggle('active',b.dataset.per===p));renderPuestos();}
@@ -8598,6 +8706,7 @@ function renderPuestos(){
       '</select></div>';
   }
   renderPuestosTabla(A,Y,curIdx,anual);
+  try{renderBrutoReal();}catch(e){console.warn('bruto real',e);}
 }
 
 function renderPuestosTabla(A,Y,curIdx,anual){
