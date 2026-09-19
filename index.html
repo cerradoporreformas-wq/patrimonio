@@ -610,7 +610,7 @@ nav::-webkit-scrollbar{display:none}
 <div class="topbar">
 <header>
   <div>
-    <div class="logo">Disfruta la Vida <small>· Patrimonio · v155</small></div>
+    <div class="logo">Disfruta la Vida <small>· Patrimonio · v157</small></div>
     <div style="font-size:10px;opacity:.5;margin-top:2px" id="hdr-date"></div>
   </div>
   <div class="hdr-right">
@@ -3459,7 +3459,14 @@ function _nomCanon(name){
   if(/^trienios\b/.test(n)&&!/extra|liquidaci/.test(n))return 'Trienios';
   if(/complemento\s*destino\b/.test(n)&&!/extra/.test(n))return 'Complemento Destino';
   if(/complemento\s*espec[ií]fico\b/.test(n)&&!/adic/.test(n))return 'Complemento Específico';
+  // v157 · La nómina del SEPE distingue «Productividad por Objetivos» de
+  // «Productividad Remanente», y yo las estaba metiendo en el mismo cajón. En
+  // octubre de 2025 venían las dos en la misma nómina (1.765,86 + 571,00) y
+  // salían sumadas en un único apunte de 2.336,86€, que es justo la distinción
+  // que hacía falta para saber qué parte es aleatoria.
   if(/prod\.?\s*objetivos\s*a\s*cuenta/.test(n))return 'Prod. Objetivos a cuenta';
+  if(/productividad.*remanente|remanente.*productividad/.test(n))return 'Productividad Remanente';
+  if(/productividad.*objetivos|objetivos.*productividad/.test(n))return 'Productividad por Objetivos';
   if(/productividad/.test(n))return 'Productividad';
   if(/extra|adicional|liquidaci/.test(n))return 'Paga extra / liquidación';
   return name.trim();
@@ -8590,10 +8597,55 @@ function prodPagosPorAnio(){
       if(/a\s*cuenta|objetivos\s*a\s*cuenta/i.test(nom))return;   // el mensual no cuenta aquí
       const P=por[y]||(por[y]={anio:y,total:0,pagos:[]});
       const imp=Number(d.amount)||0;
-      P.total+=imp; P.pagos.push({ym:x.ym,importe:imp});
+      P.total+=imp; P.pagos.push({ym:x.ym,importe:imp,nombre:nom});
     });
   });
   return Object.values(por).sort((a,b)=>b.anio.localeCompare(a.anio));
+}
+// v156 · No todos los pagos de productividad son iguales y meterlos en el mismo
+// saco tapaba justo lo que interesa ver. Son tres cosas distintas:
+//   · la fija mensual, que se cobra todos los meses a cuenta
+//   · los pagos grandes por objetivos, dos al año, que oscilan algo
+//   · el remanente, que es un reparto de lo que sobra y puede ser cero
+// La nómina los llama a todos «Productividad», así que la máquina no puede
+// distinguirlos sola. Propone los dos mayores del año como objetivos y el resto
+// como remanente, y cada pago se puede cambiar de saco con un toque.
+function prodKey(x,i){ return String(x.ym||'')+'#'+i; }
+function prodTipos(){ const c=puestosCfg(); return c.prodTipos||{}; }
+// v157 · Si la nómina lo dice, se cree a la nómina. Los botones quedan solo
+// para los apuntes antiguos, leídos cuando el lector todavía los mezclaba.
+function prodTipoPorNombre(nom){
+  const s=String(nom||'').toLowerCase();
+  if(/remanente/.test(s))return 'rem';
+  if(/objetivos/.test(s))return 'obj';
+  return null;
+}
+function prodClasifAnio(P){
+  if(!P)return null;
+  const T=prodTipos();
+  const orden=P.pagos.map((x,i)=>({...x,k:prodKey(x,i),idx:i}))
+    .sort((a,b)=>b.importe-a.importe);
+  const grandes=new Set(orden.slice(0,2).map(x=>x.k));   // los dos mayores, si no hay nada mejor
+  const pagos=P.pagos.map((x,i)=>{
+    const k=prodKey(x,i);
+    const deNom=prodTipoPorNombre(x.nombre);
+    const tipo=T[k]||deNom||(grandes.has(k)?'obj':'rem');
+    return {...x,k,tipo,origen:T[k]?'manual':(deNom?'nomina':'propuesto')};
+  });
+  return {anio:P.anio,pagos,
+    obj:pagos.filter(x=>x.tipo==='obj').reduce((s,x)=>s+x.importe,0),
+    rem:pagos.filter(x=>x.tipo==='rem').reduce((s,x)=>s+x.importe,0),
+    total:P.total};
+}
+function setProdTipo(k,tipo){
+  const T={...prodTipos()}; T[k]=tipo;
+  setPuestoCfg('prodTipos',T);
+  renderPuestos();
+}
+function toggleProdTipo(k){
+  const C=prodClasifAnio(prodAnioRef()); if(!C)return;
+  const p=C.pagos.find(x=>x.k===k); if(!p)return;
+  setProdTipo(k,p.tipo==='obj'?'rem':'obj');
 }
 // El año de referencia es el último COMPLETO: el que está en curso todavía
 // puede recibir más pagos y compararlo sería engañarse a la baja.
@@ -8691,32 +8743,54 @@ function renderPuestosProd(){
   const fila=(nom,anio,nota)=>'<tr><td style="text-align:left">'+nom+
     (nota?'<div style="font-size:9px;color:var(--faint)">'+nota+'</div>':'')+'</td>'+
     '<td>'+fmt2(anio)+'€</td><td>'+fmt2(anio/12)+'€</td><td>'+pc2(anio)+'%</td></tr>';
+  // el reparto entre objetivos y remanente sale de cómo tengas clasificados los
+  // pagos del año de referencia; si la tabla usa otra cifra total, se prorratea
+  const C=prodClasifAnio(prodAnioRef());
+  let objExtra=remAnio, remSolo=0;
+  if(C&&C.total>0){
+    objExtra=remAnio*(C.obj/C.total);
+    remSolo =remAnio*(C.rem/C.total);
+  }
   const Y=perfilYo(p), Ysin=netoSinProd(p);
   const caida=Y.netoMes-Ysin.netoMes;
   const ref=prodAnioRef();
-  const desglose=ref?('<div style="font-size:10.5px;color:var(--muted);margin-top:.35rem;line-height:1.45">'+
-      '<strong>El remanente no es un pago al año.</strong> En '+ref.anio+' te lo pagaron en '+ref.pagos.length+
-      ' veces: '+ref.pagos.map(x=>fmtMes(x.ym)+' <strong>'+fmt2(x.importe)+'€</strong>').join(' · ')+
-      ' — total <strong>'+fmt2(ref.total)+'€</strong>.'+
-      (Math.abs(ref.total-remAnio)>1?' La tabla está usando '+fmt2(remAnio)+'€, así que estas cifras se quedan cortas.':'')+
-    '</div>'):'';
   box.innerHTML=
     '<div style="border:1px solid var(--border);border-radius:7px;padding:.55rem .6rem">'+
     '<div style="font-size:11.5px;font-weight:600;margin-bottom:.35rem">Lo que va dentro de estas cifras y no es derecho consolidado</div>'+
     '<div class="tbl-scroll" style="overflow-x:auto"><table class="detail-table" style="font-size:11px;min-width:420px">'+
       '<thead><tr><th style="text-align:left">Concepto</th><th>Al año</th><th>Entre 12</th><th>% del bruto</th></tr></thead><tbody>'+
-      fila('Productividad por objetivos',objAnio,fmt2(Number(c.prodMes)||0)+'€ a cuenta cada mes')+
-      fila('Remanente',remAnio,ref?(ref.pagos.length+' pago(s) en '+ref.anio+', variable'):'reparto variable')+
+      fila('Productividad fija mensual',objAnio,fmt2(Number(c.prodMes)||0)+'€ a cuenta todos los meses')+
+      fila('Productividad por objetivos',objExtra,
+           C?(C.pagos.filter(x=>x.tipo==='obj').length+' pago(s) grandes al año · oscila'):'pagos grandes, oscilan')+
+      fila('Remanente',remSolo,'reparto de lo que sobra · aleatorio, puede ser cero')+
       '<tr style="font-weight:700;border-top:1px solid var(--border)">'+
         '<td style="text-align:left">Total</td><td>'+fmt2(totAnio)+'€</td><td>'+fmt2(totAnio/12)+'€</td>'+
         '<td>'+pc2(totAnio)+'%</td></tr>'+
     '</tbody></table></div>'+
     '<div style="font-size:10.5px;color:var(--muted);margin-top:.4rem;line-height:1.45">'+
       'Porcentajes sobre el bruto anual de nómina de «'+escapeHtml(p.nombre)+'» ('+fmt2(B.anual)+'€), sin contar el IPT. '+
-      'Si la administración dejara de pagar los dos conceptos, tu neto pasaría de <strong>'+fmt2(Y.netoMes)+
+      'Si la administración dejara de pagar los tres conceptos, tu neto pasaría de <strong>'+fmt2(Y.netoMes)+
       '€</strong> a <strong>'+fmt2(Ysin.netoMes)+'€</strong> al mes: <span class="neg">−'+fmt2(caida)+'€</span> cada mes, '+
       '−'+fmt2(caida*12)+'€ al año. El sueldo base, los trienios y los complementos de destino y específico no se tocan.'+
-    '</div>'+desglose+'</div>';
+      (remSolo>1?('<br>Solo con que no hubiera remanente —que es lo más fácil que pase— serían <strong>'+
+        fmt2(remSolo/12)+'€</strong> menos al mes en bruto, '+fmt2(remSolo)+'€ al año.'):'')+
+    '</div>'+
+    (C?('<div style="margin-top:.5rem;border-top:1px solid var(--border);padding-top:.45rem">'+
+      '<div style="font-size:10.5px;color:var(--muted);margin-bottom:.3rem">'+
+        (C.pagos.every(x=>x.origen==='nomina')
+          ? 'Pagos de productividad de '+C.anio+', tal y como los nombra tu nómina.'
+          : 'Pagos de productividad de '+C.anio+'. Los que tu nómina no distingue van marcados con ~ y son una propuesta: toca para cambiarlos.')+'</div>'+
+      '<div style="display:flex;flex-wrap:wrap;gap:.35rem">'+
+      C.pagos.map(x=>'<button type="button" class="btn-xs" onclick="toggleProdTipo(this.dataset.k)" data-k="'+x.k+'" '+
+        'style="border-color:'+(x.tipo==='obj'?'var(--navy)':'var(--amber)')+';color:'+(x.tipo==='obj'?'var(--navy)':'var(--amber)')+'">'+
+        fmtMes(x.ym)+' · '+fmt2(x.importe)+'€ · '+(x.origen==='nomina'?'':'~')+
+        (x.tipo==='obj'?'objetivos':'remanente')+'</button>').join('')+
+      '</div>'+
+      '<div style="font-size:10px;color:var(--faint);margin-top:.3rem">'+
+        'Objetivos '+fmt2(C.obj)+'€ · Remanente '+fmt2(C.rem)+'€ · Total '+fmt2(C.total)+'€'+
+        (Math.abs(C.total-remAnio)>1?(' — la tabla está usando '+fmt2(remAnio)+'€ en total, así que estas cifras se quedan cortas.'):'')+
+      '</div></div>'):'')+
+    '</div>';
   markScrollables(box);
 }
 
@@ -8998,7 +9072,7 @@ function toggleNomina(){
 }
 
 // Default concepts (editable, removable, extensible)
-const DEF_NOM_DEV=['Salario base','C. Destino','C. Específico','Trienios','Productividad','C. Esp. Adicional','Horas extras','Otros devengos'];
+const DEF_NOM_DEV=['Salario base','C. Destino','C. Específico','Trienios','Prod. Objetivos a cuenta','Productividad por Objetivos','Productividad Remanente','C. Esp. Adicional','Horas extras','Otros devengos'];
 const DEF_NOM_DED=['MUFACE','Derechos Pasivos','Prorrateo IRPF','Anticipo','Otras deducciones'];
 let _nominaDev=[]; // [{id,name,amount}]
 let _nominaDed=[];
