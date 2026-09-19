@@ -610,7 +610,7 @@ nav::-webkit-scrollbar{display:none}
 <div class="topbar">
 <header>
   <div>
-    <div class="logo">Disfruta la Vida <small>· Patrimonio · v157</small></div>
+    <div class="logo">Disfruta la Vida <small>· Patrimonio · v158</small></div>
     <div style="font-size:10px;opacity:.5;margin-top:2px" id="hdr-date"></div>
   </div>
   <div class="hdr-right">
@@ -3530,15 +3530,57 @@ async function extractPdfLines(file){
   }
   return lines;
 }
+// v158 · Antes, si el mes ya tenía desglose, la nómina se daba por buena y se
+// omitía. Eso impedía justo lo que hacía falta hoy: volver a leer una nómina
+// que se importó con un lector peor. El PDF es la fuente, así que si vuelves a
+// subirlo, manda él. Se busca el apunte del mismo mes que corresponda a ESA
+// nómina —por el devengado o por el líquido, que es lo que las distingue
+// cuando hay dos en un mes— y se le refresca el desglose. El importe cobrado
+// no se toca: eso ya está en tu cuenta y en tus totales.
 function nominaAddOrEnrich(ym,desc,liquido,nd){
   const existing=incomeLog.filter(e=>String(e.date||'').startsWith(ym)&&e.cat==='nomina');
   if(existing.length){
-    const target=existing.find(e=>!e.nd||!e.nd.devengos||!e.nd.devengos.length);
-    if(target){target.nd=nd;return 'enriquecida';}
-    return 'omitida';
+    const tot=nd&&nd.total_dev;
+    let t=null;
+    if(tot!=null) t=existing.find(e=>e.nd&&Math.abs((e.nd.total_dev||0)-tot)<0.02);
+    if(!t&&liquido!=null) t=existing.find(e=>Math.abs((e.amt||0)-liquido)<0.02);
+    if(!t) t=existing.find(e=>!e.nd||!e.nd.devengos||!e.nd.devengos.length);
+    if(t){
+      const tenia=!!(t.nd&&t.nd.devengos&&t.nd.devengos.length);
+      const igual=tenia&&JSON.stringify(t.nd)===JSON.stringify(nd);
+      if(igual)return 'ya estaba igual';
+      // El líquido de una nómina puede estar repartido en varios apuntes de
+      // ingreso (la paga llega en varias transferencias). Todos cuelgan del
+      // mismo desglose, así que se refrescan todos: dejar uno viejo significa
+      // que los cálculos siguen leyendo la versión antigua.
+      const tot=Number(nd&&nd.total_dev);
+      let tocados=0;
+      existing.forEach(e=>{
+        const mismo=(e===t)||(e.nd&&tot!=null&&Math.abs((Number(e.nd.total_dev)||0)-tot)<0.02);
+        if(mismo){e.nd=nd;tocados++;}
+      });
+      nominaSyncHist(ym,nd,t.amt);
+      return (tenia?'actualizada':'enriquecida')+(tocados>1?(' ×'+tocados):'');
+    }
+    // mismo mes pero ninguna casa: es otra nómina de ese mes (una retroactiva,
+    // una liquidación), así que entra como apunte nuevo en vez de perderse
+    incomeLog.push({id:'inc_nom_'+ym.replace('-','')+'_'+Date.now(),date:ym+'-28',desc:desc,cat:'nomina',amt:liquido,nd:nd});
+    return 'añadida (otra nómina del mismo mes)';
   }
   incomeLog.push({id:'inc_nom_'+ym.replace('-','')+'_'+Date.now(),date:ym+'-28',desc:desc,cat:'nomina',amt:liquido,nd:nd});
   return 'añadida';
+}
+// el histórico de «personal» se deja igual que el ingreso, para que no haya
+// dos versiones de la misma nómina contándose cosas distintas
+function nominaSyncHist(ym,nd,amt){
+  try{
+    const H=NOM_HIST();
+    const tot=Number(nd&&nd.total_dev)||0;
+    let t=H.find(x=>String(x.ym||'').slice(0,7)===ym&&Math.abs((Number(x.nd&&x.nd.total_dev)||0)-tot)<0.02);
+    if(!t)t=H.find(x=>String(x.ym||'').slice(0,7)===ym&&Math.abs((Number(x.amt)||0)-(Number(amt)||0))<0.02);
+    if(t)t.nd=nd; else H.push({ym,amt,nd});
+    personal.nominasHist=H; savePersonal();
+  }catch(e){console.warn('sync nóminas',e);}
 }
 async function handleNominaPdfs(ev){
   const files=[...(ev.target.files||[])]; ev.target.value='';
@@ -8557,8 +8599,39 @@ function puestoNeto(p,opt){
 // Como las nóminas están guardadas una a una, el bruto real de cada año se
 // puede sumar de verdad, y con el IPT al lado sale exactamente la casilla de
 // la renta. Eso es lo que hace esta tarjeta: no estima nada.
+// v158 · Las nóminas viven en dos sitios: el histórico de «personal» y el
+// desglose que cuelga de cada ingreso. El lector de PDF escribía solo en el
+// segundo, así que volver a subir una nómina no cambiaba nada de lo que se
+// calcula aquí. Se leen los dos y se quedan sin repetir, prefiriendo el
+// desglose más detallado —que es justamente el releído con el lector nuevo.
+// Entre dos lecturas de la misma nómina gana la que separa los conceptos de
+// productividad, no la que tenga más líneas: es la distinción que hace falta.
+function _ndScore(nd){
+  const D=(nd&&nd.devengos)||[];
+  const fino=D.some(d=>/productividad\s*(por\s*objetivos|remanente)/i.test(String(d.name||'')));
+  return (fino?1000:0)+D.length;
+}
+function NOMINAS_TODAS(){
+  const out=[], idx=new Map();
+  const add=(ym,nd,amt)=>{
+    if(!/^\d{4}-\d{2}/.test(String(ym||''))||!nd||!(nd.devengos&&nd.devengos.length))return;
+    const k=ym.slice(0,7)+'|'+Math.round((Number(nd.total_dev)||0)*100);
+    const prev=idx.get(k);
+    if(prev){
+      if(_ndScore(nd)>_ndScore(prev.nd))prev.nd=nd;
+      return;
+    }
+    const o={ym:ym.slice(0,7),nd,amt}; idx.set(k,o); out.push(o);
+  };
+  NOM_HIST().forEach(x=>add(String(x.ym||x.date||''),x.nd,x.amt));
+  (typeof incomeLog!=='undefined'?incomeLog:[]).forEach(e=>{
+    if(e.cat!=='nomina')return;
+    add(String(e.date||''),e.nd,e.amt);
+  });
+  return out;
+}
 function brutoRealAnios(){
-  const H=NOM_HIST(), por={};
+  const H=NOMINAS_TODAS(), por={};
   H.forEach(x=>{
     const y=String(x.ym||x.date||'').slice(0,4); if(!/^\d{4}$/.test(y))return;
     const nd=x.nd||{};
@@ -8589,7 +8662,7 @@ function fmtMes(ym){
 }
 function prodPagosPorAnio(){
   const por={};
-  NOM_HIST().forEach(x=>{
+  NOMINAS_TODAS().forEach(x=>{
     const y=String(x.ym||x.date||'').slice(0,4); if(!/^\d{4}$/.test(y))return;
     (x.nd&&x.nd.devengos||[]).forEach(d=>{
       const nom=String(d.name||'').trim();
@@ -8652,7 +8725,7 @@ function toggleProdTipo(k){
 function prodAnioRef(){
   const A=prodPagosPorAnio(); if(!A.length)return null;
   const meses={};
-  NOM_HIST().forEach(x=>{const y=String(x.ym||'').slice(0,4);meses[y]=(meses[y]||0)+1;});
+  NOMINAS_TODAS().forEach(x=>{const y=String(x.ym||'').slice(0,4);meses[y]=(meses[y]||0)+1;});
   return A.find(x=>(meses[x.anio]||0)>=12)||A[0];
 }
 function aplicarProdReal(){
