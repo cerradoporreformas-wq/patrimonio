@@ -610,7 +610,7 @@ nav::-webkit-scrollbar{display:none}
 <div class="topbar">
 <header>
   <div>
-    <div class="logo">Disfruta la Vida <small>· Patrimonio · v153</small></div>
+    <div class="logo">Disfruta la Vida <small>· Patrimonio · v155</small></div>
     <div style="font-size:10px;opacity:.5;margin-top:2px" id="hdr-date"></div>
   </div>
   <div class="hdr-right">
@@ -1767,6 +1767,7 @@ nav::-webkit-scrollbar{display:none}
       <div style="font-size:11px;color:var(--muted)">grupo, nivel y complemento específico son editables en cada fila</div>
     </div>
     <div class="tbl-scroll"><table class="detail-table" id="puestos-tabla" style="font-size:11.5px;width:100%"></table></div>
+    <div id="puestos-prod" style="margin-top:.7rem"></div>
     <div id="puestos-detalle" style="margin-top:.8rem"></div>
   </div>
   <div class="card">
@@ -8570,23 +8571,42 @@ function brutoRealAnios(){
   return Object.values(por).sort((a,b)=>b.anio.localeCompare(a.anio))
     .map(P=>({...P,total:P.sueldo+P.ipt}));
 }
-// La productividad variable cambia de un año a otro y la tabla de puestos la
-// lleva escrita a mano. Si la nómina dice otra cosa, más vale enterarse.
-function prodRealUltimoAnio(){
-  const H=NOM_HIST(); let mejor=null;
-  H.forEach(x=>{
+// v155 · Aquí me equivoqué y él lo vio: el remanente no es UN pago al año.
+// En 2025 hubo cuatro —abril, septiembre, octubre y diciembre— y yo estaba
+// cogiendo solo el último. Hay que sumar todos los pagos de productividad del
+// ejercicio, sin contar el «a cuenta» mensual, que es otra cosa y ya va aparte.
+const MESES_C=['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+function fmtMes(ym){
+  const m=String(ym||'').match(/^(\d{4})-(\d{2})/);
+  return m?(MESES_C[+m[2]-1]+' '+m[1].slice(2)):String(ym||'');
+}
+function prodPagosPorAnio(){
+  const por={};
+  NOM_HIST().forEach(x=>{
+    const y=String(x.ym||x.date||'').slice(0,4); if(!/^\d{4}$/.test(y))return;
     (x.nd&&x.nd.devengos||[]).forEach(d=>{
-      if(!/^productividad$/i.test(String(d.name||'').trim()))return;
-      const y=String(x.ym||'').slice(0,4);
-      if(!mejor||y>mejor.anio)mejor={anio:y,importe:Number(d.amount)||0};
+      const nom=String(d.name||'').trim();
+      if(!/productividad/i.test(nom))return;
+      if(/a\s*cuenta|objetivos\s*a\s*cuenta/i.test(nom))return;   // el mensual no cuenta aquí
+      const P=por[y]||(por[y]={anio:y,total:0,pagos:[]});
+      const imp=Number(d.amount)||0;
+      P.total+=imp; P.pagos.push({ym:x.ym,importe:imp});
     });
   });
-  return mejor;
+  return Object.values(por).sort((a,b)=>b.anio.localeCompare(a.anio));
+}
+// El año de referencia es el último COMPLETO: el que está en curso todavía
+// puede recibir más pagos y compararlo sería engañarse a la baja.
+function prodAnioRef(){
+  const A=prodPagosPorAnio(); if(!A.length)return null;
+  const meses={};
+  NOM_HIST().forEach(x=>{const y=String(x.ym||'').slice(0,4);meses[y]=(meses[y]||0)+1;});
+  return A.find(x=>(meses[x.anio]||0)>=12)||A[0];
 }
 function aplicarProdReal(){
-  const r=prodRealUltimoAnio(); if(!r)return;
-  setPuestoCfg('prodExtraAnio',r.importe);
-  toast('Productividad variable actualizada a '+fmt2(r.importe)+'€');
+  const r=prodAnioRef(); if(!r)return;
+  setPuestoCfg('prodExtraAnio',Math.round(r.total*100)/100);
+  toast('Remanente actualizado a '+fmt2(r.total)+'€ ('+r.pagos.length+' pagos de '+r.anio+')');
   renderPuestos(); renderBrutoReal();
 }
 function renderBrutoReal(){
@@ -8625,16 +8645,78 @@ function renderBrutoReal(){
       '<span style="color:var(--muted);font-size:10.5px">La tabla de puestos sirve para comparar puestos entre sí. Para cuadrar con Hacienda, la cifra es la de arriba.</span>'+
     '</div>';
   }
-  const pr=prodRealUltimoAnio();
-  if(pr&&Math.abs(pr.importe-(Number(c.prodExtraAnio)||0))>1){
+  const pr=prodAnioRef();
+  if(pr&&Math.abs(pr.total-(Number(c.prodExtraAnio)||0))>1){
     h+='<div style="margin-top:.5rem;padding:.45rem .6rem;border:1px solid var(--amber);border-radius:6px;font-size:11px">'+
-      '<strong style="color:var(--amber)">La productividad de la tabla está desfasada.</strong> '+
-      'En la tabla de puestos hay '+fmt2(Number(c.prodExtraAnio)||0)+'€, pero tu nómina de '+pr.anio+
-      ' pagó <strong>'+fmt2(pr.importe)+'€</strong>. Todos los puestos salen '+
-      fmt2(Math.abs(pr.importe-(Number(c.prodExtraAnio)||0)))+'€ '+(pr.importe>(Number(c.prodExtraAnio)||0)?'por debajo':'por encima')+' de lo real. '+
-      '<button type="button" class="btn-xs" onclick="aplicarProdReal()">Usar '+fmt2(pr.importe)+'€</button></div>';
+      '<strong style="color:var(--amber)">El remanente de la tabla está desfasado.</strong> '+
+      'En la tabla de puestos hay '+fmt2(Number(c.prodExtraAnio)||0)+'€, pero en '+pr.anio+' cobraste <strong>'+
+      fmt2(pr.total)+'€</strong> en '+pr.pagos.length+' pago(s): '+
+      pr.pagos.map(x=>fmtMes(x.ym)+' '+fmt2(x.importe)+'€').join(' · ')+'. '+
+      'Todos los puestos salen '+fmt2(Math.abs(pr.total-(Number(c.prodExtraAnio)||0)))+'€ '+
+      (pr.total>(Number(c.prodExtraAnio)||0)?'por debajo':'por encima')+' de lo real. '+
+      '<button type="button" class="btn-xs" onclick="aplicarProdReal()">Usar '+fmt2(pr.total)+'€</button></div>';
   }
   box.innerHTML=h;
+  markScrollables(box);
+}
+
+// ════════════════════════════════════════════════════════════════════
+// v154 · LA PARTE DEL SUELDO QUE NO ESTÁ ASEGURADA
+// ════════════════════════════════════════════════════════════════════
+// Todas las cifras de la tabla de arriba llevan dentro dos conceptos que no
+// son derecho consolidado: la productividad por objetivos que cobras a cuenta
+// cada mes y el remanente que se reparte una vez al año. La administración
+// puede dejar de pagarlos de un ejercicio para otro sin que cambie tu puesto
+// ni tu nivel. Conviene tener a la vista cuánto son y qué parte de la nómina
+// representan, porque es exactamente lo que desaparecería.
+function netoSinProd(p){
+  const c=puestosCfg();
+  const pm=c.prodMes, pe=c.prodExtraAnio;
+  c.prodMes=0; c.prodExtraAnio=0;
+  let r=null;
+  try{ r=perfilYo(p); } finally { c.prodMes=pm; c.prodExtraAnio=pe; }
+  return r;
+}
+function renderPuestosProd(){
+  const box=document.getElementById('puestos-prod'); if(!box)return;
+  const c=puestosCfg();
+  const p=(c.lista||[]).find(x=>x.propio)||(c.lista||[])[0];
+  if(!p){box.innerHTML='';return;}
+  const B=puestoBruto(p);
+  const objAnio=(Number(c.prodMes)||0)*12;
+  const remAnio=Number(c.prodExtraAnio)||0;
+  const totAnio=objAnio+remAnio;
+  const pct=v=>B.anual>0?(v/B.anual*100):0;
+  const pc2=v=>pct(v).toFixed(2).replace('.',',');   // coma, como el resto de la tabla
+  const fila=(nom,anio,nota)=>'<tr><td style="text-align:left">'+nom+
+    (nota?'<div style="font-size:9px;color:var(--faint)">'+nota+'</div>':'')+'</td>'+
+    '<td>'+fmt2(anio)+'€</td><td>'+fmt2(anio/12)+'€</td><td>'+pc2(anio)+'%</td></tr>';
+  const Y=perfilYo(p), Ysin=netoSinProd(p);
+  const caida=Y.netoMes-Ysin.netoMes;
+  const ref=prodAnioRef();
+  const desglose=ref?('<div style="font-size:10.5px;color:var(--muted);margin-top:.35rem;line-height:1.45">'+
+      '<strong>El remanente no es un pago al año.</strong> En '+ref.anio+' te lo pagaron en '+ref.pagos.length+
+      ' veces: '+ref.pagos.map(x=>fmtMes(x.ym)+' <strong>'+fmt2(x.importe)+'€</strong>').join(' · ')+
+      ' — total <strong>'+fmt2(ref.total)+'€</strong>.'+
+      (Math.abs(ref.total-remAnio)>1?' La tabla está usando '+fmt2(remAnio)+'€, así que estas cifras se quedan cortas.':'')+
+    '</div>'):'';
+  box.innerHTML=
+    '<div style="border:1px solid var(--border);border-radius:7px;padding:.55rem .6rem">'+
+    '<div style="font-size:11.5px;font-weight:600;margin-bottom:.35rem">Lo que va dentro de estas cifras y no es derecho consolidado</div>'+
+    '<div class="tbl-scroll" style="overflow-x:auto"><table class="detail-table" style="font-size:11px;min-width:420px">'+
+      '<thead><tr><th style="text-align:left">Concepto</th><th>Al año</th><th>Entre 12</th><th>% del bruto</th></tr></thead><tbody>'+
+      fila('Productividad por objetivos',objAnio,fmt2(Number(c.prodMes)||0)+'€ a cuenta cada mes')+
+      fila('Remanente',remAnio,ref?(ref.pagos.length+' pago(s) en '+ref.anio+', variable'):'reparto variable')+
+      '<tr style="font-weight:700;border-top:1px solid var(--border)">'+
+        '<td style="text-align:left">Total</td><td>'+fmt2(totAnio)+'€</td><td>'+fmt2(totAnio/12)+'€</td>'+
+        '<td>'+pc2(totAnio)+'%</td></tr>'+
+    '</tbody></table></div>'+
+    '<div style="font-size:10.5px;color:var(--muted);margin-top:.4rem;line-height:1.45">'+
+      'Porcentajes sobre el bruto anual de nómina de «'+escapeHtml(p.nombre)+'» ('+fmt2(B.anual)+'€), sin contar el IPT. '+
+      'Si la administración dejara de pagar los dos conceptos, tu neto pasaría de <strong>'+fmt2(Y.netoMes)+
+      '€</strong> a <strong>'+fmt2(Ysin.netoMes)+'€</strong> al mes: <span class="neg">−'+fmt2(caida)+'€</span> cada mes, '+
+      '−'+fmt2(caida*12)+'€ al año. El sueldo base, los trienios y los complementos de destino y específico no se tocan.'+
+    '</div>'+desglose+'</div>';
   markScrollables(box);
 }
 
@@ -8706,6 +8788,7 @@ function renderPuestos(){
       '</select></div>';
   }
   renderPuestosTabla(A,Y,curIdx,anual);
+  try{renderPuestosProd();}catch(e){console.warn('prod',e);}
   try{renderBrutoReal();}catch(e){console.warn('bruto real',e);}
 }
 
