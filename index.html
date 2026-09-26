@@ -610,12 +610,13 @@ nav::-webkit-scrollbar{display:none}
 <div class="topbar">
 <header>
   <div>
-    <div class="logo">Disfruta la Vida <small>· Patrimonio · v158</small></div>
+    <div class="logo">Disfruta la Vida <small>· Patrimonio · v160</small></div>
     <div style="font-size:10px;opacity:.5;margin-top:2px" id="hdr-date"></div>
   </div>
   <div class="hdr-right">
     <div class="hdr-pat" id="hdr-pat">—</div>
     <div class="hdr-lbl">Patrimonio financiero</div>
+    <div class="hdr-lbl" id="hdr-pat-total" style="margin-top:2px"></div>
   </div>
 </header>
 
@@ -643,6 +644,10 @@ nav::-webkit-scrollbar{display:none}
   <button class="nbtn" onclick="setTab('ahorro')" id="tab-ahorro">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 5c-1.5 0-2.8 1.4-3 2-3.5-1.5-11-.3-11 5 0 1.8 0 3 2 4.5V20h4v-2h3v2h4v-4c1-.5 1.7-1 2-2h2v-4h-2c0-1-.5-1.5-1-2V5z"/><path d="M2 9v1c0 1.1.9 2 2 2h1"/><path d="M16 11h0"/></svg>
     Ahorro
+  </button>
+  <button class="nbtn" onclick="setTab('viv')" id="tab-viv">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10.5 12 3l9 7.5V21a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/></svg>
+    Vivienda
   </button>
   <button class="nbtn" onclick="setTab('puestos')" id="tab-puestos">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
@@ -728,7 +733,7 @@ nav::-webkit-scrollbar{display:none}
   <div class="card">
     <div class="card-hdr">
       <div>
-        <div class="card-title">Evolución patrimonial 2019 → 2045</div>
+        <div class="card-title" id="pat-evol-title">Evolución patrimonial 2019 → 2043</div>
         <div style="font-size:10.5px;color:var(--faint);margin-top:2px">Proyecciones al 3/5/8/11% de los elementos seleccionados, sin aportaciones</div>
         <div class="legend" style="margin-top:.4rem;margin-bottom:0">
           <span class="lg"><span class="lg-line" style="background:#0B3D91"></span>Patrimonio real</span>
@@ -809,7 +814,7 @@ nav::-webkit-scrollbar{display:none}
   </div>
 
   <div class="card">
-    <div class="card-hdr"><div class="card-title">Proyección por escenario (hasta jubilación, 2045)</div></div>
+    <div class="card-hdr"><div class="card-title" id="proj-esc-title">Proyección por escenario (hasta jubilación)</div></div>
     <div style="overflow-x:auto">
       <table class="proj-table"><thead><tr id="proj-thead">
         <th>Escenario</th><th>Ahorro/mes</th>
@@ -1778,6 +1783,29 @@ nav::-webkit-scrollbar{display:none}
   </div>
 </div>
 
+<!-- ══ v159 · VIVIENDA Y VEHÍCULO ═══════════════════════════════════ -->
+<div id="panel-viv" class="panel">
+  <div class="card">
+    <div class="card-hdr"><div class="card-title">Tus bienes</div>
+      <div style="font-size:11px;color:var(--muted)">vivienda y coche, fuera del patrimonio financiero</div></div>
+    <div id="viv-bienes"></div>
+  </div>
+  <div class="card">
+    <div class="card-hdr"><div class="card-title">¿Qué vivienda te puedes permitir?</div>
+      <div style="font-size:11px;color:var(--muted)">solo o en pareja, con lo que un banco miraría</div></div>
+    <div id="viv-calc"></div>
+  </div>
+  <div class="card">
+    <div class="card-hdr"><div class="card-title">Lo que cuesta mantenerla</div>
+      <div style="font-size:11px;color:var(--muted)">de tus gastos reales de los últimos 12 meses</div></div>
+    <div id="viv-gastos"></div>
+  </div>
+  <div class="card">
+    <div class="card-hdr"><div class="card-title">Si cambias de coche</div>
+      <div style="font-size:11px;color:var(--muted)">y lo que le quita a la hipoteca</div></div>
+    <div id="viv-coche"></div>
+  </div>
+</div>
 </main>
 
 <div id="toast"></div>
@@ -4078,6 +4106,10 @@ function renderKPIs(){
   })();
 
   document.getElementById('hdr-pat').textContent=fmt(pat)+'€';
+  try{
+    const bn=bienesNetos(), el=document.getElementById('hdr-pat-total');
+    if(el)el.textContent=bn.total>0?('con vivienda y coche: '+fmt(pat+bn.total)+'€'):'';
+  }catch(e){}
   try{renderCuadre();}catch(e){console.warn('cuadre',e);}
   document.getElementById('hdr-date').textContent=lr.label+(isLatest?' · actual':'');
 
@@ -4647,9 +4679,14 @@ function initCharts(){
     const a=project(projInv,projAho,rate,PROJ), b=project(projCash,0,PROJ_CASH,PROJ);
     return a.map((v,i)=>v+(b[i]||0));
   };
-  // Project until the end of the retirement year (2045, when user turns 67)
-  const RETIRE_END_YEAR=2045;
-  const monthsToRetire=(RETIRE_END_YEAR-lastRec.year)*12+(12-lastRec.month);
+  // v159 · hasta el mes de jubilación del escenario elegido
+  const JP=jubPlan();
+  const RETIRE_END_YEAR=JP.anio;
+  const monthsToRetire=(JP.anio-lastRec.year)*12+(JP.mes-lastRec.month);
+  try{
+    const t1=document.getElementById('pat-evol-title'); if(t1)t1.textContent='Evolución patrimonial 2019 → '+JP.anio;
+    const t2=document.getElementById('proj-esc-title'); if(t2)t2.innerHTML='Proyección por escenario (jubilación '+JP.nombre+', '+fmtDate(JP.fecha)+') '+jubSelectorHTML();
+  }catch(e){}
   const PROJ=rangeCutsFuture?0:Math.max(48,monthsToRetire);
   const cons=proyecta(0.03),base=proyecta(0.05),opt=proyecta(0.08),sup=proyecta(0.11);
   const histL=histRecords.map(r=>r.label),projL=[];
@@ -4765,11 +4802,13 @@ function initCharts(){
   const startY=histRecords[histRecords.length-1].year;
   const startM=histRecords[histRecords.length-1].month;
   const checkYears=[];
-  [2027,2030,2035,2040,2043,2045].forEach(y=>{if(y>=startY)checkYears.push(y);});
+  [2027,2030,2035,2040].forEach(y=>{if(y>=startY&&y<RETIRE_END_YEAR)checkYears.push(y);});
+  if(RETIRE_END_YEAR>=startY)checkYears.push(RETIRE_END_YEAR);
   // Map each checkpoint year (December) to an index in the projection array
   const chk=[],chl=[];
   checkYears.forEach(y=>{
-    const monthsFromStart=(y-startY)*12+(12-startM); // to December of year y
+    // a diciembre de cada año, salvo el de la jubilación, que va a su mes
+    const monthsFromStart=(y-startY)*12+((y===RETIRE_END_YEAR?JP.mes:12)-startM);
     if(monthsFromStart>0&&monthsFromStart<=PROJ){
       chk.push(monthsFromStart-1); // project() arrays are 0-indexed from first projected month
       chl.push('Dic-'+String(y).slice(2));
@@ -7152,7 +7191,7 @@ function renderAhorroCats(){
 // dos proyecciones de la misma app partiendo de sitios distintos. Dos: sumaba
 // tu ahorro mensual durante los 40 años del gráfico, jubilado incluido. Las
 // aportaciones paran cuando dejas de cobrar una nómina.
-const JUB_FIN_ANIO=2045;   // último año con nómina; el panel usa el mismo
+// v159 · ya no es un número fijo: sale del escenario de jubilación elegido
 function renderAhorroProjection(avgSav){
   const proj=document.getElementById('ah-proj');if(!proj)return;
   const years=Math.max(1,Math.min(40,parseInt(document.getElementById('ah-years')?.value)||10));
@@ -7164,9 +7203,9 @@ function renderAhorroProjection(avgSav){
     const lr=(lv&&lv.hasData)?lv:last();
     start=patOf(lr);
   }catch(e){ try{const lr=last();start=patOf(lr);}catch(_){} }
-  // meses que te quedan aportando, desde hoy hasta el final del último año con nómina
-  const hoyD=new Date();
-  const mesesAportando=Math.max(0,(JUB_FIN_ANIO-hoyD.getFullYear())*12+(12-(hoyD.getMonth()+1)));
+  // meses que te quedan aportando, desde hoy hasta el mes en que te jubilas
+  const hoyD=new Date(), JP=jubPlan(), JUB_FIN_ANIO=JP.anio;
+  const mesesAportando=Math.max(0,(JP.anio-hoyD.getFullYear())*12+(JP.mes-(hoyD.getMonth()+1)));
   const labels=[],data=[],aportData=[];
   let bal=start, aportAcc=start;
   for(let mo=0;mo<=n;mo++){
@@ -7182,7 +7221,7 @@ function renderAhorroProjection(avgSav){
   proj.innerHTML=
     kc('Patrimonio en '+years+' años',fmt(finalV)+'€','partiendo de '+fmt(start)+'€','pos')+
     kc('Total aportado',fmt(aportadoTotal)+'€','ahorro medio '+fmt(avgSav)+'€/mes'+
-       (cortaAportes?'<br><span style="color:var(--faint)">aportas '+Math.round(mesesAportando/12)+' años más, hasta '+JUB_FIN_ANIO+'</span>':''),'')+
+       (cortaAportes?'<br><span style="color:var(--faint)">aportas '+Math.round(mesesAportando/12)+' años más, hasta tu jubilación '+JP.nombre+' ('+fmtDate(JP.fecha)+')</span>':''),'')+
     kc('Generado por rentabilidad',(interes>=0?'+':'')+fmt(interes)+'€','al '+(rAnnual*100).toFixed(1)+'% anual',interes>=0?'pos':'neg');
   const dark=document.body.classList.contains('dark');
   if(_ahProjChart)_ahProjChart.destroy();
@@ -8867,6 +8906,392 @@ function renderPuestosProd(){
   markScrollables(box);
 }
 
+// ════════════════════════════════════════════════════════════════════
+// v159 · VIVIENDA Y VEHÍCULO
+// ════════════════════════════════════════════════════════════════════
+// Una casa y un coche no son patrimonio financiero: no se venden en un día, no
+// rentan como un fondo y un coche solo pierde valor. Por eso van aparte y no se
+// meten en ninguna rentabilidad ni en la evolución de la cartera; solo suman en
+// el «patrimonio total», que es lo que de verdad tienes.
+//
+// Y la calculadora de vivienda hace lo que haría un banco: mira tu ingreso
+// ESTABLE —sin productividad ni remanente, que es justo lo que no garantiza
+// nadie—, limita la cuota al esfuerzo que marques, el préstamo al 80% del
+// precio (70% si no vendes la actual) y el plazo a tu edad. Lo que falte lo pone
+// la entrada, y la entrada también tiene que cubrir impuestos y gastos.
+function bienesCfg(){
+  const b=cfg.bienes=cfg.bienes||{};
+  b.viv=b.viv||{valor:0,fecha:'',pct:100,pendiente:0,gastosVenta:3.5};
+  b.veh=b.veh||{nombre:'',anio:'',valor:0};
+  b.calc=b.calc||{};
+  const c=b.calc;
+  if(c.tipo==null)c.tipo=3.0;
+  if(c.esfuerzo==null)c.esfuerzo=35;
+  if(c.plazoMax==null)c.plazoMax=30;
+  if(c.edadFin==null)c.edadFin=75;
+  // v160 · Tu discapacidad es del 33% física: el ITP reducido valenciano exige
+  // un 65% si es física, así que esa opción no te sirve y no se ofrece.
+  if(c.impuesto==null||c.impuesto==='itpdisc')c.impuesto='itp9';
+  if(c.gastosCompra==null)c.gastosCompra=1.2;
+  if(c.vender==null)c.vender=true;
+  if(c.conProd==null)c.conProd=false;
+  if(c.parejaNeto==null)c.parejaNeto=0;
+  if(c.parejaAhorro==null)c.parejaAhorro=0;
+  if(c.parejaEdad==null)c.parejaEdad='';
+  if(c.otrasCuotas==null)c.otrasCuotas=0;
+  b.gastos=b.gastos||{};
+  b.coche=b.coche||{precio:0,entregar:true,contado:0,tipo:6.5,plazo:6,costeAnual:null};
+  return b;
+}
+function setBien(ruta,v,tipo){
+  const b=bienesCfg(); const k=ruta.split('.'); let o=b;
+  for(let i=0;i<k.length-1;i++)o=o[k[i]]=o[k[i]]||{};
+  let val=v;
+  if(tipo==='num'){ const s=String(v).trim(); val=s===''?null:dgNum(s); }
+  if(tipo==='bool') val=!!v;
+  o[k[k.length-1]]=val;
+  save(); renderVivienda();
+  try{renderKPIs();}catch(e){}
+}
+function _edad(fnac){
+  if(!fnac)return null;
+  const d=new Date(fnac), h=new Date();
+  let e=h.getFullYear()-d.getFullYear();
+  if(h.getMonth()<d.getMonth()||(h.getMonth()===d.getMonth()&&h.getDate()<d.getDate()))e--;
+  return e;
+}
+function bienesNetos(){
+  const b=bienesCfg();
+  const viv=Math.max(0,(Number(b.viv.valor)||0)*(Number(b.viv.pct)||0)/100-(Number(b.viv.pendiente)||0));
+  const veh=Math.max(0,Number(b.veh.valor)||0);
+  return {viv,veh,total:viv+veh};
+}
+// cuota del sistema francés y su inversa
+function cuotaPrestamo(capital,tipoAnual,anios){
+  const i=tipoAnual/100/12, n=anios*12;
+  if(capital<=0||n<=0)return 0;
+  return i>0?capital*i/(1-Math.pow(1+i,-n)):capital/n;
+}
+function capitalPorCuota(cuota,tipoAnual,anios){
+  const i=tipoAnual/100/12, n=anios*12;
+  if(cuota<=0||n<=0)return 0;
+  return i>0?cuota*(1-Math.pow(1+i,-n))/i:cuota*n;
+}
+// el impuesto de la compra en la Comunitat Valenciana, según el caso
+function impuestoCompra(tipo,precio){
+  if(tipo==='nueva')return {pct:11.4,txt:'IVA 10% + AJD 1,4%'};
+  if(tipo==='itpdisc'){const p=precio<=180000?3:4;return {pct:p,txt:'ITP reducido '+p+'%'};}
+  return {pct:9,txt:'ITP 9%'};
+}
+// Lo que de verdad cobras cada mes y un banco daría por seguro
+function ingresoEstable(conProd){
+  try{
+    const c=puestosCfg(), p=(c.lista||[]).find(x=>x.propio)||(c.lista||[])[0];
+    if(!p)return 0;
+    return conProd?perfilYo(p).netoMes:netoSinProd(p).netoMes;
+  }catch(e){return 0;}
+}
+function liquidezHoy(){
+  try{
+    const nd=new Date(), lv=buildLiveRecord(nd.getFullYear(),nd.getMonth()+1);
+    return (lv&&lv.cash)||0;
+  }catch(e){return 0;}
+}
+// Neto que dejaría vender la vivienda actual
+function netoVentaActual(){
+  const b=bienesCfg(), v=b.viv;
+  const bruto=(Number(v.valor)||0)*(Number(v.pct)||0)/100;
+  const gastos=bruto*(Number(v.gastosVenta)||0)/100;
+  return Math.max(0,bruto-gastos-(Number(v.pendiente)||0));
+}
+// El núcleo: precio máximo con unos ingresos, una entrada, un plazo y unas cuotas
+function capacidadCompra(o){
+  const c=bienesCfg().calc;
+  const ltv=c.vender?0.80:0.70;
+  const cuotaMax=Math.max(0,o.ingreso*(Number(c.esfuerzo)||0)/100-(o.otrasCuotas||0));
+  const anios=Math.max(1,Math.min(Number(c.plazoMax)||30,(Number(c.edadFin)||75)-(o.edadMayor||48)));
+  const prestMax=capitalPorCuota(cuotaMax,Number(c.tipo)||0,anios);
+  const entrada=o.entrada;
+  // el impuesto depende del precio (3% o 4%), así que se ajusta en dos vueltas
+  let precio=0, imp=impuestoCompra(c.impuesto,0);
+  for(let k=0;k<3;k++){
+    const g=(imp.pct+(Number(c.gastosCompra)||0))/100;
+    const porCuota=(prestMax+entrada)/(1+g);
+    const porEntrada=entrada/((1-ltv)+g);
+    precio=Math.max(0,Math.min(porCuota,porEntrada));
+    imp=impuestoCompra(c.impuesto,precio);
+  }
+  const g=(imp.pct+(Number(c.gastosCompra)||0))/100;
+  const limita=((prestMax+entrada)/(1+g))<=(entrada/((1-ltv)+g))?'cuota':'entrada';
+  const gastos=precio*g;
+  const prestamo=Math.max(0,precio+gastos-entrada);
+  const cuota=cuotaPrestamo(prestamo,Number(c.tipo)||0,anios);
+  const intereses=cuota*anios*12-prestamo;
+  return {ingreso:o.ingreso,cuotaMax,anios,prestMax,entrada,ltv,precio,gastos,imp,prestamo,cuota,intereses,limita,
+          edadFin:(o.edadMayor||48)+anios};
+}
+// Gastos de la vivienda: por defecto los tuyos reales de los últimos 12 meses
+function gastosViviendaReales(){
+  const hoy=new Date(), fin=hoy.getFullYear()+'-'+String(hoy.getMonth()+1).padStart(2,'0');
+  const ini=new Date(hoy.getFullYear()-1,hoy.getMonth(),1);
+  const desde=ini.getFullYear()+'-'+String(ini.getMonth()+1).padStart(2,'0');
+  const ce=(typeof compExpenseIds==='function')?compExpenseIds():new Set();
+  // las categorías propias se guardan como mapa {id:{label…}} o como lista, según versión
+  const cc=cfg.customCats||{};
+  const labelOf=id=>{
+    const x=Array.isArray(cc)?cc.find(z=>z&&z.id===id):cc[id];
+    if(!x)return '';
+    return typeof x==='string'?x:String(x.label||x.name||'');
+  };
+  const E=expenseLog.filter(e=>{const ym=String(e.date||'').slice(0,7);return ym>=desde&&ym<fin&&!ce.has(e.id);});
+  const suma=f=>E.filter(f).reduce((s,e)=>s+(e.amt||0),0);
+  const nm=e=>String(e.name||'');
+  return {
+    ibi:suma(e=>/\bibi\b|suma gesti|catastro/i.test(nm(e))),
+    seguro:suma(e=>/seguro.*hogar|hogar.*seguro/i.test(nm(e))||/seguro/i.test(labelOf(e.cat))),
+    comunidad:suma(e=>/comunidad de propiet|\bcomunidad\b/i.test(nm(e))),
+    luz:suma(e=>e.cat==='luz'),
+    agua:suma(e=>e.cat==='agua'),
+    gas:suma(e=>/naturgy|butano|gas natural|\bgas\b/i.test(nm(e))),
+    internet:suma(e=>/internet|tel[eé]f|fibra/i.test(labelOf(e.cat))||/movistar|vodafone|orange|\bdigi\b|jazztel|masmovil|pepephone|lowi|simyo/i.test(nm(e))),
+    vehiculo:suma(e=>e.cat==='vehiculo'),
+    meses:12
+  };
+}
+const GASTO_VIV=[
+  ['ibi','IBI y tasas municipales','el recibo de Suma: IBI y basura (del impuesto del coche estás exento)'],
+  ['comunidad','Comunidad de propietarios','si es un piso o una urbanización con zonas comunes'],
+  ['seguro','Seguro de hogar',''],
+  ['vida','Seguro de vida','si el banco lo pide con la hipoteca'],
+  ['luz','Luz',''],['agua','Agua',''],['gas','Gas',''],
+  ['internet','Internet y teléfono',''],
+];
+// v160 · Pagos que no son de todas las casas y que solo tú sabes si tendrás:
+// una cochera para un segundo coche o para el tuyo, un trastero, una
+// alarma… Se añaden a mano, en euros al mes, y entran en el total.
+function vivExtras(){ const g=bienesCfg().gastos; g.extra=g.extra||[]; return g.extra; }
+function vivExtraAdd(nombre){
+  vivExtras().push({id:'vx_'+Date.now(),nombre:nombre||'',mes:0});
+  save(); renderVivienda();
+}
+function vivExtraSet(id,campo,v){
+  const x=vivExtras().find(z=>z.id===id); if(!x)return;
+  if(campo==='mes'){ const s=String(v).trim(); x.mes=s===''?0:(dgNum(s)||0); } else x.nombre=v;
+  save(); renderVivienda();
+}
+function vivExtraDel(id){
+  const g=bienesCfg().gastos; g.extra=(g.extra||[]).filter(z=>z.id!==id);
+  save(); renderVivienda();
+}
+function gastoViv(k,real){
+  const g=bienesCfg().gastos;
+  if(g[k]!=null)return {v:Number(g[k])||0,deTus:false};
+  if(k==='vida')return {v:0,deTus:false};
+  return {v:real[k]||0,deTus:true};
+}
+function inputNum(ruta,val,w,extra){
+  return '<input type="text" inputmode="decimal" value="'+(val==null||val===''?'':fmt2(val))+'" '+
+    'onchange="setBien(\''+ruta+'\',this.value,\'num\')" style="width:'+(w||80)+'px;font-size:11.5px;text-align:right;padding:2px 5px"'+(extra||'')+'>';
+}
+function renderVivienda(){
+  const b=bienesCfg(), c=b.calc, pc=pensionCfg();
+  const edadYo=_edad(pc.nacimientoFecha)||48;
+  const eur=v=>fmt2(v)+'€';
+  // ── 1 · Tus bienes ──────────────────────────────────────────────
+  const bn=bienesNetos();
+  let patFin=0; try{const nd=new Date();patFin=patOf(buildLiveRecord(nd.getFullYear(),nd.getMonth()+1));}catch(e){}
+  const B1=document.getElementById('viv-bienes');
+  if(B1){
+    B1.innerHTML=
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:.7rem">'+
+      '<div style="border:1px solid var(--border);border-radius:7px;padding:.55rem .6rem;font-size:11.5px;line-height:1.9">'+
+        '<strong>Vivienda actual</strong><br>'+
+        'Valor estimado '+inputNum('viv.valor',b.viv.valor,95)+' €<br>'+
+        'Estimado el <input type="date" value="'+(b.viv.fecha||'')+'" onchange="setBien(\'viv.fecha\',this.value)" style="font-size:11px">'+
+        '<br>Tu parte '+inputNum('viv.pct',b.viv.pct,50)+' %'+
+        '<br>Hipoteca pendiente '+inputNum('viv.pendiente',b.viv.pendiente,90)+' €'+
+        '<br>Gastos si la vendes '+inputNum('viv.gastosVenta',b.viv.gastosVenta,45)+' %'+
+        '<div style="font-size:10px;color:var(--faint);line-height:1.35;margin-top:.2rem">agencia, plusvalía municipal, cancelación… un 3-4% es lo normal. '+
+        'Si la hipoteca ya la tienes en Deudas, no la repitas aquí.</div>'+
+        '<div style="margin-top:.3rem">Neto tuyo: <strong>'+eur(bn.viv)+'</strong></div>'+
+      '</div>'+
+      '<div style="border:1px solid var(--border);border-radius:7px;padding:.55rem .6rem;font-size:11.5px;line-height:1.9">'+
+        '<strong>Vehículo</strong><br>'+
+        'Cuál <input type="text" value="'+escapeHtml(b.veh.nombre||'')+'" onchange="setBien(\'veh.nombre\',this.value)" placeholder="modelo / matrícula" style="width:130px;font-size:11px">'+
+        '<br>Año de matriculación <input type="text" inputmode="numeric" value="'+escapeHtml(String(b.veh.anio||''))+'" onchange="setBien(\'veh.anio\',this.value)" style="width:50px;font-size:11px">'+
+        '<br>Valor hoy '+inputNum('veh.valor',b.veh.valor,80)+' €'+
+        '<div style="font-size:10px;color:var(--faint);line-height:1.35;margin-top:.2rem">lo que te darían hoy por él, no lo que costó. '+
+        'Un coche con muchos años vale poco y cada año algo menos: actualízalo de vez en cuando.</div>'+
+      '</div></div>'+
+      '<div style="margin-top:.7rem;padding:.55rem .6rem;border-radius:7px;background:var(--surface2);font-size:12px;line-height:1.7">'+
+        'Patrimonio financiero <strong>'+eur(patFin)+'</strong>'+
+        (bn.viv?(' + vivienda <strong>'+eur(bn.viv)+'</strong>'):'')+
+        (bn.veh?(' + coche <strong>'+eur(bn.veh)+'</strong>'):'')+
+        '<br><span style="font-size:13.5px">Patrimonio total: <strong>'+eur(patFin+bn.total)+'</strong></span>'+
+        '<div style="font-size:10.5px;color:var(--muted)">La vivienda y el coche no entran en ninguna rentabilidad ni en la evolución de la cartera: solo suman aquí y en la cabecera.</div>'+
+      '</div>';
+  }
+  // ── 2 · Qué vivienda te puedes permitir ─────────────────────────
+  const ingYo=ingresoEstable(!!c.conProd);
+  const cuotaCoche=cocheSimulado().cuota;
+  const otras=(Number(c.otrasCuotas)||0);
+  const liq=liquidezHoy();
+  const ventaNeta=c.vender?netoVentaActual():0;
+  const ahorroYo=(c.ahorroEntrada!=null?Number(c.ahorroEntrada):liq);
+  const solo=capacidadCompra({ingreso:ingYo,otrasCuotas:otras,edadMayor:edadYo,entrada:ahorroYo+ventaNeta});
+  const edadPar=Number(c.parejaEdad)||edadYo;
+  const par=(Number(c.parejaNeto)>0)?capacidadCompra({ingreso:ingYo+Number(c.parejaNeto),otrasCuotas:otras,
+      edadMayor:Math.max(edadYo,edadPar),entrada:ahorroYo+ventaNeta+(Number(c.parejaAhorro)||0)}):null;
+  const B2=document.getElementById('viv-calc');
+  if(B2){
+    const col=(t,r)=>!r?('<td colspan="1" style="color:var(--faint);font-size:10.5px">pon abajo el neto de tu pareja</td>'):
+      '<td>'+t(r)+'</td>';
+    const fila=(nom,t,nota)=>'<tr><td style="text-align:left">'+nom+(nota?'<div style="font-size:9px;color:var(--faint)">'+nota+'</div>':'')+'</td>'+
+      '<td>'+t(solo)+'</td>'+col(t,par)+'</tr>';
+    B2.innerHTML=
+      '<div class="tbl-scroll" style="overflow-x:auto"><table class="detail-table" style="font-size:11.5px;min-width:430px">'+
+      '<thead><tr><th style="text-align:left"></th><th>Solo</th><th>En pareja</th></tr></thead><tbody>'+
+      fila('Ingreso neto mensual',r=>eur(r.ingreso),c.conProd?'con productividad':'sin productividad ni remanente')+
+      fila('Cuota máxima',r=>eur(r.cuotaMax),(c.esfuerzo)+'% del ingreso'+(otras||cuotaCoche?' menos otras cuotas':''))+
+      fila('Plazo',r=>r.anios+' años',"acabarías con "+'…')+
+      fila('Préstamo máximo',r=>eur(r.prestMax),'al '+fmt2(c.tipo)+'%')+
+      fila('Entrada disponible',r=>eur(r.entrada),c.vender?'ahorro + venta de la actual':'solo ahorro')+
+      '<tr style="font-weight:700;border-top:1px solid var(--border)"><td style="text-align:left">Precio máximo</td>'+
+        '<td class="pos">'+eur(solo.precio)+'</td>'+(par?'<td class="pos">'+eur(par.precio)+'</td>':'<td></td>')+'</tr>'+
+      fila('Impuestos y gastos',r=>eur(r.gastos),solo.imp.txt+' + '+fmt2(c.gastosCompra)+'% de gastos')+
+      fila('Te prestan',r=>eur(r.prestamo)+'<div style="font-size:9px;color:var(--faint)">'+(r.precio>0?Math.round(r.prestamo/r.precio*100):0)+'% del precio</div>','')+
+      fila('Cuota resultante',r=>'<strong>'+eur(r.cuota)+'</strong>','')+
+      fila('Intereses totales',r=>eur(r.intereses),'')+
+      fila('Te limita',r=>(r.limita==='cuota'?'la cuota':'la entrada'),'lo que antes se agota')+
+      '</tbody></table></div>'+
+      '<div style="font-size:10.5px;color:var(--muted);margin-top:.4rem;line-height:1.5">'+
+        'En pareja la vivienda sería vuestra a medias: tu parte en el patrimonio sería la mitad. '+
+        'Plazo limitado a que el mayor termine de pagar a los '+c.edadFin+'. '+
+        (solo.limita==='entrada'?'<strong>Te limita la entrada, no el sueldo</strong>: más ahorro sube el precio mucho más que más ingresos.':
+          '<strong>Te limita la cuota</strong>: con más entrada comprarías igual, pero con menos hipoteca.')+
+      '</div>'+
+      '<details style="margin-top:.5rem"><summary style="font-size:11.5px;cursor:pointer">Ajustes</summary>'+
+      '<div style="font-size:11.5px;line-height:2;margin-top:.3rem">'+
+        '<label><input type="checkbox" '+(c.vender?'checked':'')+' onchange="setBien(\'calc.vender\',this.checked,\'bool\')"> Vendo la actual para comprar</label>'+
+        ' <span style="font-size:10px;color:var(--faint)">(si no, sería segunda vivienda: el banco presta el 70%, no el 80%)</span><br>'+
+        '<label><input type="checkbox" '+(c.conProd?'checked':'')+' onchange="setBien(\'calc.conProd\',this.checked,\'bool\')"> Contar la productividad y el remanente</label>'+
+        ' <span style="font-size:10px;color:var(--faint)">(un banco prudente no los cuenta enteros)</span><br>'+
+        'Ahorro que pones '+inputNum('calc.ahorroEntrada',c.ahorroEntrada!=null?c.ahorroEntrada:null,90,' placeholder="'+fmt2(liq)+'"')+' € '+
+        '<span style="font-size:10px;color:var(--faint)">vacío = tu liquidez de hoy ('+eur(liq)+'); fondos y acciones no cuentan salvo que los vendas</span><br>'+
+        'Neto de tu pareja '+inputNum('calc.parejaNeto',c.parejaNeto,80)+' €/mes · su ahorro '+inputNum('calc.parejaAhorro',c.parejaAhorro,80)+
+        ' € · su edad <input type="text" inputmode="numeric" value="'+escapeHtml(String(c.parejaEdad||''))+'" onchange="setBien(\'calc.parejaEdad\',this.value)" style="width:40px;font-size:11px"><br>'+
+        'Tipo de interés '+inputNum('calc.tipo',c.tipo,45)+' % <span style="font-size:10px;color:var(--faint)">(pon el que te ofrezcan)</span> · '+
+        'esfuerzo máximo '+inputNum('calc.esfuerzo',c.esfuerzo,40)+' %<br>'+
+        'Plazo máximo '+inputNum('calc.plazoMax',c.plazoMax,40)+' años · terminar de pagar antes de los '+inputNum('calc.edadFin',c.edadFin,40)+'<br>'+
+        'Otras cuotas que ya pagas '+inputNum('calc.otrasCuotas',c.otrasCuotas,70)+' €/mes'+(cuotaCoche?(' <span style="font-size:10px;color:var(--amber)">+ '+eur(cuotaCoche)+' del coche simulado abajo</span>'):'')+'<br>'+
+        'Vivienda <select onchange="setBien(\'calc.impuesto\',this.value)" style="font-size:11px">'+
+          '<option value="itp9"'+(c.impuesto==='itp9'?' selected':'')+'>Usada · ITP 9%</option>'+
+          '<option value="nueva"'+(c.impuesto==='nueva'?' selected':'')+'>Nueva · IVA 10% + AJD 1,4%</option>'+
+        '</select> · otros gastos '+inputNum('calc.gastosCompra',c.gastosCompra,40)+' %'+
+        '<div style="font-size:10px;color:var(--faint);line-height:1.4">ITP general valenciano del 9% desde junio de 2026. '+
+        'El reducido por discapacidad pide un 65% física, así que con tu 33% no aplica. Los tipos cambian: compruébalo antes de firmar.</div>'+
+      '</div></details>';
+    // el plazo con la edad al terminar
+    B2.innerHTML=B2.innerHTML.replace("acabarías con …","acabarías con "+solo.edadFin+" años"+(par?(' / '+par.edadFin):''));
+  }
+  // ── 3 · Lo que cuesta mantenerla ────────────────────────────────
+  const real=gastosViviendaReales();
+  const B3=document.getElementById('viv-gastos');
+  if(B3){
+    let tot=0, h3='';
+    GASTO_VIV.forEach(([k,nom,nota])=>{
+      const g=gastoViv(k,real); tot+=g.v;
+      h3+='<tr><td style="text-align:left">'+nom+
+        (nota?'<div style="font-size:9px;color:var(--faint)">'+nota+'</div>':'')+
+        (g.deTus&&g.v>0?'<div style="font-size:9px;color:var(--faint)">de tus gastos reales</div>':'')+'</td>'+
+        '<td>'+inputNum('gastos.'+k,g.v,80)+'</td><td>'+eur(g.v/12)+'</td></tr>';
+    });
+    // pagos añadidos a mano
+    vivExtras().forEach(x=>{
+      const anual=(Number(x.mes)||0)*12; tot+=anual;
+      h3+='<tr><td style="text-align:left">'+
+        '<input type="text" value="'+escapeHtml(x.nombre||'')+'" placeholder="concepto" '+
+          'onchange="vivExtraSet(\''+x.id+'\',\'nombre\',this.value)" style="width:130px;font-size:11px"> '+
+        '<button type="button" class="btn-xs" onclick="vivExtraDel(\''+x.id+'\')" title="quitar">✕</button></td>'+
+        '<td>'+eur(anual)+'</td>'+
+        '<td><input type="text" inputmode="decimal" value="'+(x.mes?fmt2(x.mes):'')+'" placeholder="€/mes" '+
+          'onchange="vivExtraSet(\''+x.id+'\',\'mes\',this.value)" style="width:70px;font-size:11.5px;text-align:right;padding:2px 5px"></td></tr>';
+    });
+    const precioRef=(par&&par.precio)||solo.precio||0;
+    const mantPct=Number(b.gastos.mantPct!=null?b.gastos.mantPct:1);
+    const mant=precioRef*mantPct/100; tot+=mant;
+    h3+='<tr><td style="text-align:left">Mantenimiento y reparaciones<div style="font-size:9px;color:var(--faint)">'+
+      inputNum('gastos.mantPct',mantPct,36)+'% del precio al año</div></td><td>'+eur(mant)+'</td><td>'+eur(mant/12)+'</td></tr>';
+    const cuotaRef=(par&&par.cuota)||solo.cuota||0;
+    const mensual=cuotaRef+tot/12;
+    const ingRef=(par?par.ingreso:solo.ingreso)||1;
+    B3.innerHTML='<div class="tbl-scroll" style="overflow-x:auto"><table class="detail-table" style="font-size:11.5px;min-width:360px">'+
+      '<thead><tr><th style="text-align:left">Gasto</th><th>Al año</th><th>Al mes</th></tr></thead><tbody>'+h3+
+      '<tr><td colspan="3" style="text-align:left">'+
+        '<button type="button" class="btn-xs" onclick="vivExtraAdd(\'Cochera\')">+ Cochera</button> '+
+        '<button type="button" class="btn-xs" onclick="vivExtraAdd(\'\')">+ Otro pago</button>'+
+        '<span style="font-size:9.5px;color:var(--faint)"> en euros al mes</span></td></tr>'+
+      '<tr style="font-weight:700;border-top:1px solid var(--border)"><td style="text-align:left">Total sin hipoteca</td><td>'+eur(tot)+'</td><td>'+eur(tot/12)+'</td></tr>'+
+      '<tr style="font-weight:700"><td style="text-align:left">+ cuota de la hipoteca</td><td>'+eur(cuotaRef*12)+'</td><td>'+eur(cuotaRef)+'</td></tr>'+
+      '<tr style="font-weight:700;border-top:1px solid var(--border)"><td style="text-align:left">Lo que te cuesta la casa</td><td>'+eur(mensual*12)+'</td><td>'+eur(mensual)+'</td></tr>'+
+      '</tbody></table></div>'+
+      '<div style="font-size:10.5px;color:var(--muted);margin-top:.4rem;line-height:1.5">'+
+        'Sobre la vivienda de '+eur(precioRef)+(par?' en pareja':'')+'. Eso es el <strong>'+Math.round(mensual/ingRef*100)+'%</strong> de '+
+        (par?'vuestros ingresos':'tu ingreso')+(par?(', unos '+eur(mensual/2)+' al mes cada uno si vais a medias'):'')+'. '+
+        'Los importes salen de lo que has gastado de verdad en los últimos 12 meses en tu casa actual; una casa más grande gastará más. '+
+        'Toca cualquier cifra para cambiarla: en las filas de siempre se escribe el importe al año; en los pagos añadidos, al mes.'+
+      '</div>';
+  }
+  // ── 4 · Coche ────────────────────────────────────────────────────
+  const B4=document.getElementById('viv-coche');
+  if(B4){
+    const k=b.coche, S=cocheSimulado();
+    const costeReal=real.vehiculo||0;
+    const sinCoche=capacidadCompra({ingreso:ingYo,otrasCuotas:otras,edadMayor:edadYo,entrada:ahorroYo+ventaNeta});
+    const soloSin=(function(){const cc=bienesCfg().calc;return capacidadCompra({ingreso:ingYo,otrasCuotas:otras-0,edadMayor:edadYo,
+      entrada:ahorroYo+ventaNeta+(S.desembolso||0)});})();
+    const conCoche=capacidadCompra({ingreso:ingYo,otrasCuotas:otras+S.cuota,edadMayor:edadYo,entrada:ahorroYo+ventaNeta-(S.desembolso||0)});
+    B4.innerHTML=
+      '<div style="font-size:11.5px;line-height:2">'+
+        'Precio del coche nuevo '+inputNum('coche.precio',k.precio,90)+' € '+
+        '<label><input type="checkbox" '+(k.entregar?'checked':'')+' onchange="setBien(\'coche.entregar\',this.checked,\'bool\')"> entrego el actual ('+eur(Number(b.veh.valor)||0)+')</label><br>'+
+        'Pago al contado '+inputNum('coche.contado',k.contado,80)+' € · financio el resto al '+inputNum('coche.tipo',k.tipo,40)+' % a '+inputNum('coche.plazo',k.plazo,32)+' años<br>'+
+        'Coste anual de tenerlo '+inputNum('coche.costeAnual',k.costeAnual!=null?k.costeAnual:null,80,' placeholder="'+fmt2(costeReal)+'"')+' € '+
+        '<span style="font-size:10px;color:var(--faint)">vacío = lo que gastas hoy con el tuyo ('+eur(costeReal)+'/año: gasolina, seguro, taller…)</span>'+
+      '</div>'+
+      (S.precio>0?(
+      '<div class="tbl-scroll" style="overflow-x:auto;margin-top:.4rem"><table class="detail-table" style="font-size:11.5px;min-width:360px"><tbody>'+
+        '<tr><td style="text-align:left">Sale de tu liquidez</td><td>'+eur(S.desembolso)+'</td></tr>'+
+        '<tr><td style="text-align:left">Financias</td><td>'+eur(S.financiado)+'</td></tr>'+
+        '<tr><td style="text-align:left">Cuota</td><td><strong>'+eur(S.cuota)+'</strong>/mes · '+eur(S.intereses)+' de intereses</td></tr>'+
+        '<tr><td style="text-align:left">Lo que valdrá</td><td>'+S.valores.map((v,i)=>'año '+(i+1)+': '+eur(v)).filter((x,i)=>[0,2,4].includes(i)).join(' · ')+'</td></tr>'+
+        '<tr><td style="text-align:left">Lo que pierde en 5 años</td><td class="neg">−'+eur(S.precio-S.valores[4])+'</td></tr>'+
+        '<tr style="font-weight:700;border-top:1px solid var(--border)"><td style="text-align:left">Vivienda máxima sin el coche</td><td>'+eur(sinCoche.precio)+'</td></tr>'+
+        '<tr style="font-weight:700"><td style="text-align:left">Vivienda máxima con el coche</td><td>'+eur(conCoche.precio)+
+          ' <span class="neg">(−'+eur(Math.max(0,sinCoche.precio-conCoche.precio))+')</span></td></tr>'+
+      '</tbody></table></div>'+
+      '<div style="font-size:10.5px;color:var(--muted);margin-top:.4rem;line-height:1.5">'+
+        'La depreciación es una regla general: −20% el primer año y −12% cada año después. '+
+        'La cuota del coche cuenta para el banco como una deuda más y resta de la cuota de hipoteca que te conceden; '+
+        'y lo que pagas al contado sale de la entrada. Por eso comprar el coche <strong>antes</strong> que la casa encarece la casa.'+
+      '</div>'):'<div style="font-size:10.5px;color:var(--muted);margin-top:.3rem">Pon un precio para ver qué supondría.</div>');
+  }
+}
+// El coche simulado: lo que cuesta, lo que se financia y lo que vale con los años
+function cocheSimulado(){
+  const b=bienesCfg(), k=b.coche;
+  const precio=Number(k.precio)||0;
+  if(precio<=0)return {precio:0,cuota:0,desembolso:0,financiado:0,intereses:0,valores:[0,0,0,0,0]};
+  const entrega=k.entregar?Math.min(precio,Number(b.veh.valor)||0):0;
+  const contado=Math.min(Math.max(0,Number(k.contado)||0),precio-entrega);
+  const financiado=Math.max(0,precio-entrega-contado);
+  const cuota=cuotaPrestamo(financiado,Number(k.tipo)||0,Number(k.plazo)||1);
+  const intereses=cuota*(Number(k.plazo)||1)*12-financiado;
+  const valores=[]; let v=precio;
+  for(let i=0;i<5;i++){ v=v*(i===0?0.80:0.88); valores.push(v); }
+  return {precio,entrega,contado,financiado,cuota,intereses,desembolso:contado,valores};
+}
+
 let _puestoMode='ipt', _puestoPer='mes', _puestosChart=null;
 function setPuestoMode(m){_puestoMode=m;}
 function setPuestoPer(p){_puestoPer=p;document.querySelectorAll('.puesto-per-btn').forEach(b=>b.classList.toggle('active',b.dataset.per===p));renderPuestos();}
@@ -9102,7 +9527,7 @@ function _puestosExtra(A,Y,curIdx){
 }
 
 function setTab(t){
-  ['dash','entrada','hist','vista','analisis','ahorro','puestos'].forEach(id=>{
+  ['dash','entrada','hist','vista','analisis','ahorro','puestos','viv'].forEach(id=>{
     document.getElementById('panel-'+id)?.classList.toggle('active',id===t);
     document.getElementById('tab-'+id)?.classList.toggle('active',id===t);
   });
@@ -9111,6 +9536,7 @@ function setTab(t){
   if(t==='analisis'){renderAnalisis();}
   if(t==='ahorro'){renderAhorro();}
   if(t==='puestos'){renderPuestos();}
+  if(t==='viv'){try{renderVivienda();}catch(e){console.warn('vivienda',e);}}
   if(t==='analisis'){try{renderPrecios();}catch(e){console.warn('precios',e);}}
 }
 function setSc(s){
@@ -15465,6 +15891,39 @@ function jubFechas(){
   return {f60,f30,fVoluntaria,fForzosa,fMax,fCarencia,
     voluntariaPosible:fVoluntaria<=fMax,
     carenciaOK:fCarencia<=fForzosa};
+}
+// ════════════════════════════════════════════════════════════════════
+// v159 · UNA SOLA FECHA DE JUBILACIÓN PARA TODA LA APP
+// ════════════════════════════════════════════════════════════════════
+// El panel, la proyección por escenarios, sus hitos y la proyección de ahorro
+// llevaban 2045 escrito a mano, «cuando cumples 67». Pero en Clases Pasivas la
+// forzosa es a los 65 —este mismo módulo lo dice— y eso es abril de 2043: dos
+// años de sueldo y aportaciones proyectados que no existirán salvo que pidas la
+// prórroga. Ahora todo sale de aquí, y el escenario se elige.
+function jubPlan(){
+  const c=pensionCfg(), F=jubFechas();
+  const esc=c.jubEscenario||'forzosa';
+  let f=null;
+  if(F) f=(esc==='voluntaria'?F.fVoluntaria:(esc==='prorroga'?F.fMax:F.fForzosa));
+  if(!f) f='2043-12-31';
+  const y=+f.slice(0,4), m=+f.slice(5,7);
+  const nom={voluntaria:'voluntaria',forzosa:'forzosa',prorroga:'con prórroga'}[esc]||'forzosa';
+  return {fecha:f,anio:y,mes:m,escenario:esc,nombre:nom,F};
+}
+function setJubEscenario(v){
+  pensionCfg().jubEscenario=v; save();
+  try{initCharts();}catch(e){}
+  try{renderAhorro();}catch(e){}
+  try{renderPension();}catch(e){}
+}
+function jubSelectorHTML(){
+  const J=jubPlan(), F=J.F;
+  const op=(v,t)=>'<option value="'+v+'"'+(J.escenario===v?' selected':'')+'>'+t+'</option>';
+  return '<select onchange="setJubEscenario(this.value)" style="font-size:11px;padding:1px 4px">'+
+    (F?op('voluntaria','Voluntaria · '+fmtDate(F.fVoluntaria)):'')+
+    op('forzosa','Forzosa · '+(F?fmtDate(F.fForzosa):'65 años'))+
+    (F?op('prorroga','Prórroga · '+fmtDate(F.fMax)):'')+
+    '</select>';
 }
 // La IPT: hoy cobra el 55% de su base reguladora. El +20% (art. 6 del Decreto
 // 1646/1972) exige 55 años cumplidos y NO estar trabajando: mientras siga de
