@@ -610,7 +610,7 @@ nav::-webkit-scrollbar{display:none}
 <div class="topbar">
 <header>
   <div>
-    <div class="logo">Disfruta la Vida <small>· Patrimonio · v160</small></div>
+    <div class="logo">Disfruta la Vida <small>· Patrimonio · v161 · <a href="./nueva.html" style="color:inherit">versión nueva</a></small></div>
     <div style="font-size:10px;opacity:.5;margin-top:2px" id="hdr-date"></div>
   </div>
   <div class="hdr-right">
@@ -3300,8 +3300,14 @@ function processBankRows(rows){
         const limpio=dedupKey(kind,date,amt,cleanDesc(raw)||raw);
         return limpio===bruto?[bruto]:[bruto,limpio];
       };
+      // v161 · además de por descripción, cada apunte queda localizable por
+      // día e importe: si lo anotaste a mano con otra descripción, el extracto
+      // no tiene por qué saberlo, pero el día y el importe sí coinciden.
+      const _porFI=new Map();
       const _registrar=(kind,date,amt,raw)=>{
         const e={usado:false};
+        const fk=kind+'|'+date+'|'+Math.round(amt*100);
+        if(!_porFI.has(fk))_porFI.set(fk,[]); _porFI.get(fk).push(e);
         _claves(kind,date,amt,raw).forEach(k=>{
           if(!_idx.has(k))_idx.set(k,[]);
           _idx.get(k).push(e);
@@ -3354,6 +3360,22 @@ function processBankRows(rows){
         if(BANK_SKIP.test(merchant)){skip++;skippedNames.push(merchant.slice(0,40));continue;}
         if(amt>0){if(yaEsta('i',date,amt,merchant)){dup++;dupDetalle.push(fmtDate(date)+'  '+fmt2(amt)+'€  '+String(merchant).slice(0,28));continue;}marcar('i',date,amt,merchant);newInc.push({id:'inc_'+Date.now()+'_'+i,date,desc:(cleanDesc(merchant)||merchant).slice(0,60),cat:incCat||catIncome(merchant),amt:Math.round(amt*100)/100});addI++;}
         else{const a=Math.abs(amt);if(yaEsta('e',date,a,merchant)){dup++;dupDetalle.push(fmtDate(date)+'  −'+fmt2(a)+'€  '+String(merchant).slice(0,28));continue;}marcar('e',date,a,merchant);newExp.push({id:'exp_'+Date.now()+'_'+i,date,name:(cleanDesc(merchant)||merchant).slice(0,60),amt:Math.round(a*100)/100,cat:catExpense(merchant),kind:'estructural'});addE++;}
+      }
+      // v161 · Segunda vuelta, solo para ingresos: un ingreso que en el extracto
+      // tiene el mismo día y el mismo importe que uno que ya tienes —y que no se
+      // ha emparejado con nada en la primera vuelta— es ese mismo ingreso con la
+      // descripción cambiada a mano. Pasaba con la paga extra del IPT de junio:
+      // la anotaste tú al cotejar la renta y el extracto la volvía a meter.
+      // Solo ingresos: son pocos y grandes, y dos distintos el mismo día por el
+      // mismo importe no pasan; con gastos sí (dos cafés), y ahí no se toca.
+      for(let k=newInc.length-1;k>=0;k--){
+        const x=newInc[k];
+        const L=_porFI.get('i|'+x.date+'|'+Math.round(x.amt*100))||[];
+        const libre=L.find(e=>!e.usado);
+        if(libre){
+          libre.usado=true; newInc.splice(k,1); addI--; dup++;
+          dupDetalle.push(fmtDate(x.date)+'  '+fmt2(x.amt)+'€  '+String(x.desc).slice(0,20)+' (ya lo tenías con otra descripción)');
+        }
       }
       // v119 · Antes, si no había nada nuevo, salía un aviso de una línea y ya.
       // Con un archivo que no se lee bien el resultado es idéntico al de un
