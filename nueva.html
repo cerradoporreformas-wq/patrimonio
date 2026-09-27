@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#F4F6F5">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Disfruta">
+<link rel="apple-touch-icon" href="icon.png">
+<title>Disfruta la Vida · nueva</title>
+<style>
+:root{
+  --papel:#F4F6F5; --superficie:#FFFFFF; --tinta:#17232F; --pizarra:#5B6B78;
+  --pluma:#1F5C8B; --hoja:#2C7A57; --granate:#9E3434; --linea:#D6DEDB; --suave:#E9EEEC;
+  --liq:#7FA7C9; --fon:#1F5C8B; --acc:#2C7A57; --brk:#B9C7C2; --deu:#9E3434;
+  --r1:6px; --r2:14px;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --papel:#14202A; --superficie:#1B2A36; --tinta:#E6ECEF; --pizarra:#9AAAB6;
+  --pluma:#7FB2DE; --hoja:#6CC398; --granate:#E08A8A; --linea:#2B3B48; --suave:#223340;
+  --liq:#4E7EA6; --fon:#7FB2DE; --acc:#6CC398; --brk:#4A5B66; --deu:#E08A8A;}}
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+*,*::before,*::after{box-sizing:inherit}
+html,body{margin:0;background:var(--papel);color:var(--tinta)}
+body{font:15px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif;-webkit-text-size-adjust:100%}
+.num{font-family:ui-rounded,"SF Pro Rounded",-apple-system,system-ui,sans-serif;font-variant-numeric:tabular-nums}
+main{max-width:680px;margin:0 auto;padding:18px 18px 110px}
+h1,h2{font-weight:600;margin:0}
+h2{font-size:18px;margin:34px 0 10px}
+p{margin:.4em 0}
+.pie{color:var(--pizarra);font-size:13px}
+a{color:var(--pluma)}
+button{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--pluma);outline-offset:2px}
+.btn{background:var(--pluma);color:#fff;border:0;border-radius:var(--r1);padding:9px 14px;font-weight:600;cursor:pointer}
+.btn.sec{background:transparent;color:var(--pluma);border:1px solid var(--linea)}
+.btn.peligro{background:transparent;color:var(--granate);border:1px solid var(--linea)}
+/* navegación */
+nav.pestanas{position:fixed;left:0;right:0;bottom:0;background:var(--superficie);border-top:1px solid var(--linea);
+  padding:6px 8px calc(6px + env(safe-area-inset-bottom,0px));z-index:5}
+nav.pestanas .fila{display:flex;gap:2px;overflow-x:auto;max-width:680px;margin:0 auto;scrollbar-width:none}
+nav.pestanas .fila::-webkit-scrollbar{display:none}
+nav.pestanas button{flex:0 0 auto;border:0;background:none;padding:8px 11px;border-radius:var(--r1);font-size:13.5px;color:var(--pizarra);cursor:pointer;white-space:nowrap}
+nav.pestanas button[aria-current="page"]{background:var(--suave);color:var(--tinta);font-weight:600}
+nav.pestanas button.luego{opacity:.55}
+/* hoy */
+.cifra{font-size:46px;font-weight:600;letter-spacing:-.02em;line-height:1.05;margin:6px 0 2px}
+.cifra small{font-size:24px;font-weight:500;color:var(--pizarra);margin-left:2px}
+.tienes{font-size:17px;color:var(--pizarra);margin:8px 0 0}
+.linea-res{font-size:14px;color:var(--pizarra)}
+.pos{color:var(--hoja)} .neg{color:var(--granate)}
+.regla{display:flex;height:34px;border-radius:var(--r2);overflow:hidden;margin:22px 0 10px;background:var(--suave)}
+.regla span{display:block;height:100%;min-width:3px}
+.leyenda{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px 18px;margin:0;padding:0;list-style:none}
+.leyenda li{display:grid;grid-template-columns:10px 1fr;column-gap:8px;align-items:baseline}
+.leyenda i{width:10px;height:10px;border-radius:2px;display:inline-block}
+.leyenda b{grid-column:2;font-size:17px;font-weight:600}
+.leyenda span{grid-column:2;font-size:13px;color:var(--pizarra)}
+.leyenda li{cursor:pointer;border-radius:var(--r1);padding:4px 6px;margin:-4px -6px}
+.leyenda li.sel{background:var(--suave)}
+.desglose{margin:10px 0 0;padding:12px 14px;background:var(--superficie);border-radius:var(--r1);border:1px solid var(--linea)}
+.desglose table{width:100%;border-collapse:collapse;font-size:14px}
+.desglose td{padding:4px 0}
+.desglose td:last-child{text-align:right}
+.desglose .sub{color:var(--pizarra);font-size:12px}
+/* pendientes */
+.pend{list-style:none;margin:0;padding:0}
+.pend li{display:grid;grid-template-columns:4px 1fr;gap:12px;padding:10px 0;border-bottom:1px solid var(--linea)}
+.pend li:last-child{border-bottom:0}
+.pend .marca{border-radius:2px;background:var(--linea)}
+.pend .grave .marca{background:var(--granate)}
+.pend .que{font-size:14.5px}
+.pend .hacer{font-size:13px;color:var(--pluma)}
+.vacio{padding:14px;border:1px dashed var(--linea);border-radius:var(--r1);color:var(--pizarra);font-size:14px}
+/* gráfico */
+.grafico{width:100%;height:auto;display:block;margin-top:6px}
+.grafico .area{fill:var(--pluma);opacity:.12}
+.grafico .trazo{fill:none;stroke:var(--pluma);stroke-width:1.6}
+.grafico .eje{fill:var(--pizarra);font-size:10px}
+.grafico .hueco{fill:var(--granate);opacity:.07}
+.grafico .punto{fill:var(--pluma)}
+/* fuentes */
+.fuentes{width:100%;border-collapse:collapse;font-size:14px}
+.fuentes td{padding:6px 0;border-bottom:1px solid var(--linea)}
+.fuentes td:last-child{text-align:right;color:var(--pizarra)}
+.fuentes .viejo{color:var(--granate)}
+/* buzón */
+.bloque{background:var(--superficie);border:1px solid var(--linea);border-radius:var(--r1);padding:14px 16px;margin:12px 0}
+.bloque h3{font-size:15px;margin:0 0 4px}
+.bloque .acciones{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.estado{font-size:14px;line-height:1.7}
+.aviso{margin-top:12px;padding:10px 12px;border-radius:var(--r1);background:var(--suave);font-size:13.5px}
+.aviso.ok{border-left:3px solid var(--hoja)} .aviso.mal{border-left:3px solid var(--granate)}
+@media (prefers-reduced-motion:no-preference){.regla span{transition:flex-grow .5s ease}}
+@media (max-width:420px){.cifra{font-size:40px}.cifra small{font-size:20px}}
+
+</style>
+</head>
+<body>
+<main id="main" aria-live="polite"></main>
+<nav class="pestanas" aria-label="Pantallas"><div class="fila" id="nav"></div></nav>
+<script>
+// ════════════════════════════════════════════════════════════════════
+// DISFRUTA LA VIDA · v2 · MOTOR
+// ════════════════════════════════════════════════════════════════════
+// Tres almacenes y nada más:
+//   mov  · el libro: cada euro que se mueve es UN apunte
+//   val  · saldos y valoraciones, cada uno con su fecha, su fuente y su bróker
+//   sit  · tu situación: los supuestos, en un solo sitio
+// Todo lo demás —patrimonio, ahorro, rentabilidad, impuestos— se CALCULA a
+// partir de ahí, siempre con la misma función. Nada se guarda dos veces, así
+// que no hay dos cifras que puedan contradecirse.
+//
+// La app actual (dlv_*) no se toca nunca: se lee para migrar y ya está.
+'use strict';
+const V2_KEY='dlv2_db';
+const HOY=()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');};
+const finMes=(y,m)=>{const d=new Date(y,m,0);return y+'-'+String(m).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');};
+const r2=v=>Math.round((Number(v)||0)*100)/100;
+
+// ─── Migración ─────────────────────────────────────────────────────
+// Entra lo mismo venga de donde venga: el almacenamiento de la app actual
+// (mismo navegador, mismo dominio) o una copia JSON exportada desde ella.
+function leerAppActual(ls){
+  const g=k=>{try{const r=ls.getItem(k);return r?JSON.parse(r):null;}catch(e){return null;}};
+  const cfg=g('dlv_cfg'); if(!cfg)return null;
+  return {cfg,records:g('dlv_records')||[],transactions:g('dlv_tx')||[],soldStocks:g('dlv_sold')||[],
+    balanceLog:g('dlv_ballog')||[],incomeLog:g('dlv_income')||[],expenseLog:g('dlv_expense')||[],
+    brokerFlows:g('dlv_brokerflows')||[],reembolsos:g('dlv_reembolsos')||[],personal:g('dlv_personal')||{}};
+}
+function migrar(old,origen){
+  const c=old.cfg||{};
+  const db={v:2,creado:new Date().toISOString(),origen:origen||'app actual',
+    cuentas:[],activos:[],mov:[],val:[],cierres:[],compensaciones:[],sit:{},reglas:{},legado:{}};
+  (c.accounts||[]).forEach(a=>db.cuentas.push({id:a.id,nombre:a.name,
+    tipo:/efectivo|casa|met[aá]lico/i.test(a.name||'')?'efectivo':'banco'}));
+  (c.brokers||[]).forEach(b=>db.cuentas.push({id:b.id,nombre:b.name,tipo:'broker'}));
+  (c.debts||[]).forEach(d=>db.cuentas.push({id:d.id,nombre:d.name,tipo:'deuda'}));
+  const vendidas=new Set(old.soldStocks||[]);
+  (c.funds||[]).forEach(f=>db.activos.push({id:f.id,nombre:f.name,tipo:'fondo',isin:f.isin||null}));
+  (c.stocks||[]).forEach(s=>db.activos.push({id:s.id,nombre:s.name,tipo:'accion',
+    isin:s.isin||null,tick:s.tick||null,cerrada:vendidas.has(s.id)}));
+  // el libro
+  (old.incomeLog||[]).forEach(e=>db.mov.push({id:e.id,fecha:e.date,tipo:'ingreso',importe:r2(e.amt),
+    cat:e.cat,desc:e.desc,nd:e.nd||undefined,stock:e.stockId||undefined}));
+  (old.expenseLog||[]).forEach(e=>db.mov.push({id:e.id,fecha:e.date,tipo:'gasto',importe:r2(e.amt),
+    cat:e.cat,desc:e.name,clase:e.kind,fijoId:e.fijoId||undefined}));
+  (old.transactions||[]).forEach(t=>{
+    if(t.type==='fund_aport')db.mov.push({id:t.id,fecha:t.date,tipo:'aportacion',importe:r2(t.amount),activo:t.fundId});
+    else if(t.type==='buy'||t.type==='sell')db.mov.push({id:t.id,fecha:t.date,tipo:t.type==='buy'?'compra':'venta',
+      activo:t.stockId,titulos:Number(t.shares)||0,precio:Number(t.price)||0,costes:r2(t.costs),
+      importe:r2(t.total),fuente:t.src||undefined,ext:t.ext||t.orden||undefined,mktval:t.mktval||undefined,
+      motivo:t.exitReason||undefined});
+  });
+  (old.brokerFlows||[]).forEach(f=>db.mov.push({id:f.id,fecha:f.date,tipo:f.type==='retira'?'de_broker':'a_broker',
+    importe:r2(f.amount),cuenta:f.brokerId,ext:f.ext||undefined}));
+  // saldos y valoraciones
+  const refT={acc:'cuenta',broker:'cuenta',debt:'cuenta',fund:'activo',stock:'activo'};
+  (old.balanceLog||[]).forEach(b=>{ if(!refT[b.refType])return;
+    db.val.push({id:b.id,fecha:b.date,refTipo:refT[b.refType],ref:b.refId,importe:r2(b.amount),
+      fuente:b.src||undefined,brk:b.brk||undefined}); });
+  // histórico mensual: lo único que hay de 2015 a enero de 2026 son totales
+  (old.records||[]).forEach(r=>db.cierres.push({ym:r.year+'-'+String(r.month).padStart(2,'0'),
+    pat:r2(r.pat),cash:r2(r.cash),fondos:r2(r.fondos),acc:r2(r.acc),deuda:r2(r.deuda)}));
+  db.cierres.sort((a,b)=>a.ym.localeCompare(b.ym));
+  db.compensaciones=(old.reembolsos||[]).slice();
+  db.sit={pension:c.pension||{},puestos:c.puestosCfg||null,bienes:c.bienes||null,fiscal:c.fiscal||null,
+    gastosFijos:c.gastos_fijos||[],projAporte:c.projAporte||null};
+  db.reglas={catRules:c.catRules||[],customCats:c.customCats||{},recatIgnored:c.recatIgnored||[]};
+  // lo que se portará en fases siguientes, intacto
+  db.legado={personal:old.personal||{}};
+  db.mov.sort((a,b)=>String(a.fecha||'').localeCompare(String(b.fecha||'')));
+  return db;
+}
+
+// ─── Consultas básicas ─────────────────────────────────────────────
+function valDe(db,ref,hasta){
+  return db.val.filter(v=>v.ref===ref&&(!hasta||String(v.fecha)<=hasta))
+    .sort((a,b)=>String(b.fecha).localeCompare(String(a.fecha)));
+}
+function saldo(db,ref,hasta){ const e=valDe(db,ref,hasta); return e.length?e[0].importe:null; }
+// Una acción puede estar en varios brókers: su valor es la suma de la última
+// valoración de cada uno. Un apunte viejo sin bróker deja de contar en cuanto
+// hay uno con bróker de esa fecha o posterior; uno escrito a mano, si es el
+// más reciente, manda como total.
+const SRC_IMPORT=/^(degiro|xtb|portfolio)$/i;
+function valorAccion(db,id,hasta){
+  const e=valDe(db,id,hasta);
+  if(!e.length)return {total:null,partes:[],fecha:null};
+  const g={}; e.forEach(x=>{const k=x.brk||'';if(!g[k])g[k]=x;});
+  const conBrk=Object.keys(g).filter(k=>k);
+  let suelta=g[''];
+  if(!conBrk.length)return {total:suelta.importe,partes:[{brk:'',importe:suelta.importe,fecha:suelta.fecha}],fecha:suelta.fecha};
+  const masNueva=conBrk.reduce((d,k)=>g[k].fecha>d?g[k].fecha:d,'');
+  const heredado=suelta&&SRC_IMPORT.test(String(suelta.fuente||''));
+  if(heredado&&suelta.fecha<=masNueva)suelta=null;
+  if(suelta&&suelta.fecha>=masNueva)
+    return {total:suelta.importe,partes:[{brk:'',importe:suelta.importe,fecha:suelta.fecha,manual:true}],fecha:suelta.fecha};
+  const partes=conBrk.map(k=>({brk:k,importe:g[k].importe,fecha:g[k].fecha}));
+  return {total:r2(partes.reduce((s,p)=>s+p.importe,0)),partes,fecha:masNueva};
+}
+function titulosEn(db,id,hasta){
+  return db.mov.reduce((s,m)=>{
+    if(m.activo!==id||(hasta&&String(m.fecha)>hasta))return s;
+    if(m.tipo==='compra')return s+(m.titulos||0);
+    if(m.tipo==='venta')return s-(m.titulos||0);
+    return s;
+  },0);
+}
+function accionAbierta(db,a,hasta,esHoy){
+  const compradas=db.mov.some(m=>m.activo===a.id&&m.tipo==='compra'&&(!hasta||String(m.fecha)<=hasta));
+  const vivas=titulosEn(db,a.id,hasta);
+  if(esHoy&&a.cerrada)return false;
+  return !(compradas&&vivas<=1e-6);
+}
+
+// ─── Patrimonio en una fecha ───────────────────────────────────────
+// Una sola función. La cabecera, el gráfico y cualquier pantalla futura
+// llaman a esta; por eso no pueden no cuadrar.
+function patrimonio(db,fecha){
+  const hoy=HOY(), f=fecha||hoy, esHoy=(f>=hoy);
+  const out={fecha:f,cash:0,fondos:0,acciones:0,broker:0,deuda:0,detalle:{cuentas:[],fondos:[],acciones:[],brokers:[],deudas:[]}};
+  db.cuentas.forEach(c=>{
+    const v=saldo(db,c.id,f); if(v==null)return;
+    if(c.tipo==='broker'){out.broker+=v;out.detalle.brokers.push({id:c.id,nombre:c.nombre,importe:v});}
+    else if(c.tipo==='deuda'){out.deuda+=v;out.detalle.deudas.push({id:c.id,nombre:c.nombre,importe:v});}
+    else {out.cash+=v;out.detalle.cuentas.push({id:c.id,nombre:c.nombre,importe:v});}
+  });
+  db.activos.forEach(a=>{
+    if(a.tipo==='fondo'){
+      const v=saldo(db,a.id,f); if(!v)return;
+      out.fondos+=v; out.detalle.fondos.push({id:a.id,nombre:a.nombre,importe:v});
+    } else {
+      if(!accionAbierta(db,a,esHoy?null:f,esHoy))return;
+      let V=valorAccion(db,a.id,esHoy?null:f);
+      let v=V.total;
+      if(v==null){   // sin valoración: la última compra con valor de mercado, como hacía la app
+        const c=db.mov.filter(m=>m.activo===a.id&&m.tipo==='compra'&&m.mktval>0&&(esHoy||String(m.fecha)<=f))
+          .sort((x,y)=>String(y.fecha).localeCompare(String(x.fecha)))[0];
+        v=c?c.mktval:0;
+      }
+      if(v>0){out.acciones+=v;out.detalle.acciones.push({id:a.id,nombre:a.nombre,importe:v,partes:V.partes,fecha:V.fecha});}
+    }
+  });
+  ['cash','fondos','acciones','broker','deuda'].forEach(k=>out[k]=r2(out[k]));
+  out.financiero=r2(out.cash+out.fondos+out.acciones+out.broker-out.deuda);
+  return out;
+}
+// ¿Hay datos de todo lo que tenías en esa fecha? Si una cuenta que ya existía
+// todavía no tiene ningún saldo guardado, el patrimonio de ese mes saldría
+// cojo: el gráfico enseñaría una caída que nunca ocurrió. Entonces ese mes se
+// deja en blanco y se dice por qué, en vez de pintar un número falso.
+function cobertura(db,f){
+  const falta=[];
+  const primera=ref=>{const e=db.val.filter(v=>v.ref===ref).map(v=>v.fecha).sort();return e[0]||null;};
+  db.cuentas.forEach(c=>{
+    const p=primera(c.id); if(!p)return;
+    if(c.tipo==='banco'||c.tipo==='efectivo'){ if(p>f)falta.push(c.nombre); }
+    else if(c.tipo==='broker'){
+      const vivo=db.mov.some(m=>m.cuenta===c.id&&m.tipo==='a_broker'&&String(m.fecha)<=f);
+      if(vivo&&p>f)falta.push(c.nombre);
+    }
+  });
+  db.activos.forEach(a=>{
+    const p=primera(a.id);
+    if(a.tipo==='fondo'){
+      const vivo=db.mov.some(m=>m.activo===a.id&&m.tipo==='aportacion'&&String(m.fecha)<=f);
+      if(vivo&&(!p||p>f))falta.push(a.nombre);
+    } else if(titulosEn(db,a.id,f)>1e-6){
+      const mk=db.mov.some(m=>m.activo===a.id&&m.tipo==='compra'&&m.mktval>0&&String(m.fecha)<=f);
+      if((!p||p>f)&&!mk)falta.push(a.nombre);
+    }
+  });
+  return falta;
+}
+// Serie mensual: el histórico importado hasta donde llega y, desde ahí, calculado
+function seriePatrimonio(db){
+  const S=db.cierres.map(c=>({ym:c.ym,pat:c.pat,origen:'cierre'}));
+  const ult=S.length?S[S.length-1].ym:null;
+  const hoy=HOY(), [hy,hm]=[+hoy.slice(0,4),+hoy.slice(5,7)];
+  let y,m;
+  if(ult){y=+ult.slice(0,4);m=+ult.slice(5,7)+1;if(m>12){m=1;y++;}}
+  else{const f=db.val.map(v=>v.fecha).sort()[0]; if(!f)return S; y=+f.slice(0,4);m=+f.slice(5,7);}
+  while(y<hy||(y===hy&&m<=hm)){
+    const esActual=(y===hy&&m===hm), f=esActual?hoy:finMes(y,m);
+    const falta=esActual?[]:cobertura(db,f);
+    if(falta.length) S.push({ym:y+'-'+String(m).padStart(2,'0'),pat:null,origen:'sin datos',falta});
+    else S.push({ym:y+'-'+String(m).padStart(2,'0'),pat:patrimonio(db,f).financiero,origen:esActual?'hoy':'calculado'});
+    m++; if(m>12){m=1;y++;}
+  }
+  return S;
+}
+
+// ─── Bienes (vivienda y coche) ─────────────────────────────────────
+function bienes(db){
+  const b=(db.sit&&db.sit.bienes)||{}, v=b.viv||{}, c=b.veh||{};
+  const viv=Math.max(0,(Number(v.valor)||0)*(Number(v.pct)||0)/100-(Number(v.pendiente)||0));
+  const veh=Math.max(0,Number(c.valor)||0);
+  return {viv:r2(viv),veh:r2(veh),total:r2(viv+veh)};
+}
+
+// ─── Pendientes: lo que la app ve que falta, para que no tengas que buscarlo ──
+function pendientes(db){
+  const P=[], hoy=HOY(), dias=f=>Math.round((Date.parse(hoy)-Date.parse(f))/864e5);
+  // saldos que se están quedando viejos
+  db.cuentas.filter(c=>c.tipo!=='deuda').forEach(c=>{
+    const e=valDe(db,c.id)[0]; if(!e)return;
+    const d=dias(e.fecha);
+    if(d>14)P.push({tipo:'saldo',grave:d>35,texto:c.nombre+': el último saldo es de hace '+d+' días',
+      accion:c.tipo==='efectivo'?'Actualiza lo que tienes':(c.tipo==='broker'?'Importa la cartera':'Sube el extracto')});
+  });
+  // una acción con compras en dos brókers pero valorada solo en uno
+  db.activos.filter(a=>a.tipo==='accion'&&!a.cerrada).forEach(a=>{
+    const fuentes=new Set(db.mov.filter(m=>m.activo===a.id&&m.tipo==='compra')
+      .map(m=>/xtb/i.test(m.fuente||'')?'xtb':'degiro'));
+    const V=valorAccion(db,a.id);
+    if(fuentes.size>1&&V.partes.length<2&&titulosEn(db,a.id)>0)
+      P.push({tipo:'broker',grave:true,texto:a.nombre+' la tienes en dos brókers pero solo está valorada en uno',accion:'Importa las dos carteras'});
+  });
+  // dividendos que no se sabe de qué acción son
+  const acc=db.activos.filter(a=>a.tipo==='accion');
+  const norm=s=>String(s||'').toUpperCase().replace(/[^A-Z0-9 ]/g,'').replace(/\s+/g,' ').trim();
+  const sinDueno=db.mov.filter(m=>m.tipo==='ingreso'&&m.cat==='dividendo'&&!m.stock&&
+    !acc.some(a=>{const n=norm(a.nombre);return n.length>=4&&norm(m.desc).includes(n.split(' ')[0]);}));
+  if(sinDueno.length)P.push({tipo:'dividendo',grave:false,texto:sinDueno.length+' dividendo(s) sin saber de qué acción son',accion:'Asígnalos en la app actual'});
+  // pagos de productividad que la nómina no distingue
+  const nd=db.mov.filter(m=>m.tipo==='ingreso'&&m.nd&&m.nd.devengos);
+  const vistos=new Set(); let sinDist=0;
+  nd.forEach(m=>{
+    const k=String(m.fecha).slice(0,7)+'|'+Math.round((m.nd.total_dev||0)*100);
+    if(vistos.has(k))return; vistos.add(k);
+    m.nd.devengos.forEach(d=>{ if(/^productividad$/i.test(String(d.name||'').trim()))sinDist++; });
+  });
+  if(sinDist)P.push({tipo:'nomina',grave:false,texto:sinDist+' pago(s) de productividad sin saber si son objetivos o remanente',accion:'Vuelve a subir esas nóminas'});
+  // tablas de retribuciones del año pasado
+  if(+hoy.slice(0,4)>2026)P.push({tipo:'tablas',grave:true,texto:'Las tablas de sueldos son de 2026',accion:'Pásame las de '+hoy.slice(0,4)});
+  return P.sort((a,b)=>(b.grave?1:0)-(a.grave?1:0));
+}
+// Cuándo llegó el último dato de cada fuente
+function frescura(db){
+  const F={};
+  db.val.forEach(v=>{
+    const c=db.cuentas.find(x=>x.id===v.ref);
+    let k=null;
+    if(c&&c.tipo!=='deuda')k=c.nombre;
+    else if(v.brk){const b=db.cuentas.find(x=>x.id===v.brk);k=b?b.nombre+' (cartera)':null;}
+    if(k&&(!F[k]||v.fecha>F[k]))F[k]=v.fecha;
+  });
+  return Object.entries(F).map(([k,f])=>({fuente:k,fecha:f})).sort((a,b)=>b.fecha.localeCompare(a.fecha));
+}
+
+if(typeof module!=='undefined'&&module.exports)module.exports={leerAppActual,migrar,patrimonio,seriePatrimonio,cobertura,valorAccion,
+  bienes,pendientes,frescura,saldo,titulosEn,HOY,finMes,V2_KEY};
+
+// ════════════════════════════════════════════════════════════════════
+// v2 · INTERFAZ
+// ════════════════════════════════════════════════════════════════════
+'use strict';
+let DB=null;
+const $=s=>document.querySelector(s);
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+// Siempre con separador de miles: en español «8849,40» y «162.868,78» en la
+// misma pantalla parecen dos formatos distintos.
+function eur(v,dec){
+  const d=dec==null?2:dec, n=Number(v)||0, neg=n<0;
+  const [ent,fr]=Math.abs(n).toFixed(d).split('.');
+  return (neg?'−':'')+ent.replace(/\B(?=(\d{3})+(?!\d))/g,'.')+(d?','+fr:'')+' €';
+}
+const miles=v=>String(Math.round(Number(v)||0)).replace(/\B(?=(\d{3})+(?!\d))/g,'.');
+function fecha(iso){ if(!iso)return '—'; const [y,m,d]=String(iso).slice(0,10).split('-'); return d?(+d+'/'+(+m)+'/'+y.slice(2)):iso; }
+const MESES=['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+const mesLargo=ym=>MESES[+ym.slice(5,7)-1]+' de '+ym.slice(0,4);
+
+// ─── Guardado ──────────────────────────────────────────────────────
+function cargar(){ try{const r=localStorage.getItem(V2_KEY);DB=r?JSON.parse(r):null;}catch(e){DB=null;} }
+function guardar(){
+  try{ localStorage.setItem(V2_KEY,JSON.stringify(DB)); return true; }
+  catch(e){ alert('No se ha podido guardar: el almacenamiento del navegador está lleno.'); return false; }
+}
+
+// ─── Pantallas ─────────────────────────────────────────────────────
+const PANTALLAS=[
+  ['hoy','Hoy',true],['flujo','Entra y sale',false],['inv','Inversiones',false],['sueldo','Tu sueldo',false],
+  ['imp','Impuestos',false],['futuro','Futuro',false],['decis','Decisiones',false],['buzon','Buzón',true]];
+let actual='hoy';
+function nav(){
+  $('#nav').innerHTML=PANTALLAS.map(([id,t,hecha])=>
+    '<button type="button" data-p="'+id+'" class="'+(hecha?'':'luego')+'"'+(id===actual?' aria-current="page"':'')+'>'+t+'</button>').join('');
+  $('#nav').querySelectorAll('button').forEach(b=>b.onclick=()=>ir(b.dataset.p));
+}
+function ir(p){ actual=p; nav(); pintar(); window.scrollTo(0,0); }
+function pintar(){
+  const m=$('#main');
+  if(!DB&&actual!=='buzon'){ m.innerHTML=sinDatos(); enlazarBuzon(); return; }
+  if(actual==='hoy')m.innerHTML=hoy();
+  else if(actual==='buzon'){ m.innerHTML=buzon(); enlazarBuzon(); }
+  else m.innerHTML=todavia(actual);
+  enlazarHoy();
+}
+function sinDatos(){
+  return '<h1 style="font-size:24px;margin-top:10px">Todavía no hay datos aquí</h1>'+
+    '<p class="pie" style="font-size:15px">Esta versión no pide que vuelvas a meter nada: coge lo que ya tienes. '+
+    'Si la app de siempre está abierta en este mismo navegador, lo trae sola. Si no, carga tu última copia.</p>'+
+    bloqueTraer();
+}
+function todavia(id){
+  const t=PANTALLAS.find(x=>x[0]===id)[1];
+  return '<h1 style="font-size:24px;margin-top:10px">'+t+'</h1>'+
+    '<p class="pie" style="font-size:15px">Esta pantalla todavía no está hecha en la versión nueva. '+
+    'Mientras tanto, todo sigue funcionando en la app de siempre, que no se ha tocado.</p>'+
+    '<p style="margin-top:14px"><a class="btn" href="./index.html" style="text-decoration:none;display:inline-block">Abrir la app de siempre</a></p>';
+}
+
+// ─── Hoy ───────────────────────────────────────────────────────────
+let abierto=null;
+function hoy(){
+  const P=patrimonio(DB), B=bienes(DB), S=seriePatrimonio(DB);
+  // el mes anterior con datos completos, para comparar
+  const prev=[...S].reverse().find(x=>x.origen!=='hoy'&&x.pat!=null);
+  const dif=prev?P.financiero-prev.pat:null;
+  const [ent,dec]=eur(P.financiero).replace(' €','').split(',');
+  const bloques=[
+    ['cash','Liquidez','--liq',P.cash,P.detalle.cuentas],
+    ['fondos','Fondos','--fon',P.fondos,P.detalle.fondos],
+    ['acciones','Acciones','--acc',P.acciones,P.detalle.acciones],
+    ['broker','Efectivo en brókers','--brk',P.broker,P.detalle.brokers]];
+  const total=bloques.reduce((s,b)=>s+Math.max(0,b[3]),0)||1;
+  let h='<p class="tienes">Tienes</p>'+
+    '<div class="cifra num">'+ent+'<small>,'+dec+' €</small></div>'+
+    '<div class="linea-res">'+
+      (dif!=null?('<span class="num '+(dif>=0?'pos':'neg')+'">'+(dif>=0?'+':'')+eur(dif,0)+'</span> desde el final de '+mesLargo(prev.ym)):'')+
+      (P.deuda?('. Descontadas deudas por '+eur(P.deuda,0)):'')+
+      (B.total>0?('. Con tu casa y el coche, <span class="num">'+eur(P.financiero+B.total,0)+'</span>'):'')+
+    '</div>';
+  h+='<div class="regla" role="img" aria-label="Reparto del patrimonio">'+
+    bloques.filter(b=>b[3]>0).map(b=>'<span style="flex-grow:'+(b[3]/total)+';background:var('+b[2]+')" title="'+b[1]+'"></span>').join('')+'</div>';
+  h+='<ul class="leyenda">'+bloques.filter(b=>b[3]>0).map(b=>
+      '<li data-b="'+b[0]+'" tabindex="0" role="button" aria-expanded="'+(abierto===b[0])+'"'+(abierto===b[0]?' class="sel"':'')+'><i style="background:var('+b[2]+')"></i><span>'+b[1]+'</span>'+
+      '<b class="num">'+eur(b[3],0)+'</b><span>'+Math.round(b[3]/total*100)+'%</span></li>').join('')+'</ul>';
+  if(abierto){
+    const b=bloques.find(x=>x[0]===abierto);
+    if(b){
+      h+='<div class="desglose"><table>'+b[4].slice().sort((x,y)=>y.importe-x.importe).map(x=>
+        '<tr><td>'+esc(x.nombre)+
+          (x.partes&&x.partes.length>1?('<div class="sub">'+x.partes.map(p=>{const c=DB.cuentas.find(z=>z.id===p.brk);return (c?c.nombre:'')+' '+eur(p.importe);}).join(', ')+'</div>'):'')+
+        '</td><td class="num">'+eur(x.importe)+'</td></tr>').join('')+'</table></div>';
+    }
+  }
+  // pendientes
+  const PE=pendientes(DB);
+  h+='<h2>'+(PE.length?'Te toca':'Nada pendiente')+'</h2>';
+  h+=PE.length?('<ul class="pend">'+PE.map(p=>'<li class="'+(p.grave?'grave':'')+'"><span class="marca"></span>'+
+      '<div><div class="que">'+esc(p.texto)+'</div><div class="hacer">'+esc(p.accion)+'</div></div></li>').join('')+'</ul>')
+    :'<div class="vacio">Todo al día. Cuando falte algo —un extracto viejo, una acción mal valorada, una nómina por clasificar— aparecerá aquí.</div>';
+  // evolución
+  h+='<h2>Cómo ha ido</h2>'+grafico(S);
+  const huecos=S.filter(x=>x.origen==='sin datos');
+  if(huecos.length){
+    h+='<p class="pie">De '+mesLargo(huecos[0].ym)+' a '+mesLargo(huecos[huecos.length-1].ym)+
+      ' no hay saldos guardados de todas tus cuentas, así que esos meses van en blanco en vez de enseñar una caída que no fue. '+
+      'Desde ahí en adelante se calculan solos cada mes.</p>';
+  }
+  // de cuándo es cada dato
+  const F=frescura(DB), h0=HOY();
+  h+='<h2>De cuándo es cada dato</h2><table class="fuentes">'+F.map(f=>{
+    const d=Math.round((Date.parse(h0)-Date.parse(f.fecha))/864e5);
+    return '<tr><td>'+esc(f.fuente)+'</td><td class="'+(d>14?'viejo':'')+'">'+
+      'el '+fecha(f.fecha)+', '+(d===0?'hoy':d===1?'ayer':'hace '+d+' días')+'</td></tr>';}).join('')+'</table>';
+  return h;
+}
+function enlazarHoy(){
+  document.querySelectorAll('.leyenda li').forEach(li=>{
+    const f=()=>{abierto=(abierto===li.dataset.b?null:li.dataset.b);pintar();};
+    li.onclick=f; li.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();f();}};
+  });
+}
+// Área mensual en SVG: los huecos se ven como huecos
+function grafico(S){
+  const W=640,H=200,pl=8,pr=8,pt=10,pb=22;
+  const vals=S.map(x=>x.pat).filter(v=>v!=null);
+  if(!vals.length)return '<div class="vacio">Sin datos todavía.</div>';
+  const max=Math.max(...vals)*1.06, n=S.length;
+  const X=i=>pl+(W-pl-pr)*(n<=1?0:i/(n-1)), Y=v=>pt+(H-pt-pb)*(1-v/max);
+  let tramos=[],cur=[];
+  S.forEach((x,i)=>{ if(x.pat==null){if(cur.length)tramos.push(cur);cur=[];} else cur.push([X(i),Y(x.pat)]); });
+  if(cur.length)tramos.push(cur);
+  let s='<svg class="grafico" viewBox="0 0 '+W+' '+H+'" role="img" aria-label="Patrimonio mes a mes">';
+  // huecos
+  let i=0; while(i<n){ if(S[i].pat==null){let j=i;while(j<n&&S[j].pat==null)j++;
+      s+='<rect class="hueco" x="'+X(i-0.5)+'" y="'+pt+'" width="'+(X(j-0.5)-X(i-0.5))+'" height="'+(H-pt-pb)+'"/>';i=j;} else i++; }
+  tramos.forEach(t=>{
+    const d=t.map((p,k)=>(k?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' ');
+    s+='<path class="area" d="'+d+' L'+t[t.length-1][0].toFixed(1)+' '+(H-pb)+' L'+t[0][0].toFixed(1)+' '+(H-pb)+' Z"/>';
+    s+='<path class="trazo" d="'+d+'"/>';
+  });
+  const ult=S.length-1; if(S[ult].pat!=null)s+='<circle class="punto" cx="'+X(ult)+'" cy="'+Y(S[ult].pat)+'" r="3.5"/>';
+  // años en el eje
+  S.forEach((x,k)=>{ if(x.ym.slice(5)==='01'&&(+x.ym.slice(0,4))%2===0)
+    s+='<text class="eje" x="'+X(k)+'" y="'+(H-6)+'" text-anchor="middle">'+x.ym.slice(0,4)+'</text>'; });
+  s+='</svg>';
+  return s;
+}
+
+// ─── Buzón y ajustes ───────────────────────────────────────────────
+function bloqueTraer(){
+  const hayApp=!!localStorage.getItem('dlv_cfg');
+  return '<div class="bloque"><h3>Traer tus datos</h3>'+
+    '<p class="pie">'+(hayApp
+      ?'La app de siempre tiene datos en este navegador. Traerlos no cambia nada en ella: solo los lee.'
+      :'No encuentro la app de siempre en este navegador (en el iPad, la app añadida a la pantalla de inicio guarda sus datos aparte de Safari). Carga tu última copia: el archivo patrimonio_datos_… que exportas.')+'</p>'+
+    '<div class="acciones">'+
+      (hayApp?'<button type="button" class="btn" id="b-traer">'+(DB?'Volver a traer de la app de siempre':'Traer de la app de siempre')+'</button>':'')+
+      '<label class="btn '+(hayApp?'sec':'')+'" style="display:inline-block">Cargar una copia<input type="file" id="f-copia" accept=".json,application/json" hidden></label>'+
+    '</div><div id="msg"></div></div>';
+}
+function buzon(){
+  let h='<h1 style="font-size:24px;margin-top:10px">Buzón</h1>'+
+    '<p class="pie" style="font-size:15px">Aquí entrará todo: extractos, carteras y nóminas, sin tener que elegir botón. '+
+    'En esta primera versión solo trae y guarda tus datos; los importadores llegan en la siguiente.</p>';
+  if(DB){
+    const P=patrimonio(DB);
+    h+='<div class="bloque"><h3>Lo que hay</h3><div class="estado">'+
+      'Traído de '+(DB.origen==='copia'?'una copia':'la app de siempre')+' el '+fecha(DB.creado)+'<br>'+
+      '<span class="num">'+miles(DB.mov.length)+'</span> apuntes en el libro, <span class="num">'+miles(DB.val.length)+'</span> saldos y valoraciones, '+
+      '<span class="num">'+miles(DB.cierres.length)+'</span> meses de histórico<br>'+
+      'Patrimonio calculado: <b class="num">'+eur(P.financiero)+'</b></div></div>';
+  }
+  h+=bloqueTraer();
+  if(DB){
+    h+='<div class="bloque"><h3>Copia de seguridad</h3><p class="pie">Un archivo con todo lo de esta versión. No sustituye a la copia de la app de siempre mientras convivan las dos.</p>'+
+      '<div class="acciones"><button type="button" class="btn sec" id="b-exportar">Guardar copia</button></div></div>';
+    h+='<div class="bloque"><h3>Empezar de cero</h3><p class="pie">Borra solo los datos de esta versión. La app de siempre no se toca.</p>'+
+      '<div class="acciones"><button type="button" class="btn peligro" id="b-borrar">Borrar los datos de esta versión</button></div></div>';
+  }
+  return h;
+}
+function aviso(txt,ok){ const m=$('#msg'); if(m)m.innerHTML='<div class="aviso '+(ok?'ok':'mal')+'">'+txt+'</div>'; }
+function traerDe(old,origen){
+  if(!old||!old.cfg){aviso('Ese archivo no es una copia de la app: no tiene la configuración dentro.',false);return;}
+  if(DB&&!confirm('Esto sustituye lo que hay en esta versión por lo que traigas ahora. ¿Seguir?'))return;
+  DB=migrar(old,origen);
+  if(guardar()){
+    const P=patrimonio(DB);
+    aviso('Traído: '+miles(DB.mov.length)+' apuntes y '+miles(DB.val.length)+' valoraciones. Patrimonio de hoy: '+eur(P.financiero)+'.',true);
+    setTimeout(()=>ir('hoy'),900);
+  }
+}
+function enlazarBuzon(){
+  const t=$('#b-traer'); if(t)t.onclick=()=>traerDe(leerAppActual(localStorage),'app actual');
+  const f=$('#f-copia'); if(f)f.onchange=ev=>{
+    const file=ev.target.files[0]; ev.target.value=''; if(!file)return;
+    const r=new FileReader();
+    r.onload=()=>{
+      let j=null; try{j=JSON.parse(r.result);}catch(e){aviso('No se puede leer: no es un JSON válido.',false);return;}
+      if(j&&j.v===2&&j.mov){ if(DB&&!confirm('Esto sustituye lo que hay en esta versión. ¿Seguir?'))return;
+        DB=j; if(guardar()){aviso('Copia de esta versión cargada.',true);setTimeout(()=>ir('hoy'),900);} return; }
+      traerDe(j,'copia');
+    };
+    r.readAsText(file);
+  };
+  const x=$('#b-exportar'); if(x)x.onclick=()=>{
+    const blob=new Blob([JSON.stringify(DB)],{type:'application/json'});
+    const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+    a.download='disfruta_v2_'+HOY()+'.json'; document.body.appendChild(a); a.click();
+    setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},500);
+  };
+  const b=$('#b-borrar'); if(b)b.onclick=()=>{
+    if(!confirm('¿Borrar los datos de esta versión? La app de siempre no se toca.'))return;
+    localStorage.removeItem(V2_KEY); DB=null; ir('buzon');
+  };
+}
+
+// ─── Arranque ──────────────────────────────────────────────────────
+// La primera vez, si la app de siempre está en este navegador, se trae sola.
+function arrancar(){
+  cargar();
+  if(!DB){ const old=leerAppActual(localStorage); if(old){ DB=migrar(old,'app actual'); guardar(); } }
+  nav(); pintar();
+}
+document.addEventListener('DOMContentLoaded',arrancar);
+
+</script>
+</body>
+</html>
