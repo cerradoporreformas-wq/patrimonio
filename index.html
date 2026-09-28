@@ -610,7 +610,7 @@ nav::-webkit-scrollbar{display:none}
 <div class="topbar">
 <header>
   <div>
-    <div class="logo">Disfruta la Vida <small>· Patrimonio · v161 · <a href="./nueva.html" style="color:inherit">versión nueva</a></small></div>
+    <div class="logo">Disfruta la Vida <small>· Patrimonio · v162 · <a href="./nueva.html" style="color:inherit">versión nueva</a></small></div>
     <div style="font-size:10px;opacity:.5;margin-top:2px" id="hdr-date"></div>
   </div>
   <div class="hdr-right">
@@ -2086,7 +2086,13 @@ function getStockAggregates(){
     // Get current value: prefer date-stamped balance log, then records, then buy mktval
     let currentVal=0;
     const balEntry=(typeof balanceLog!=='undefined')?balUltimo('stock',s.id):null;
-    if(balEntry){currentVal=balEntry.amount||0;}
+    if(balEntry){
+      // v162 · el valor de una acción es la suma de lo que vale en CADA bróker
+      // (stockValor), no el último apunte suelto: con Ibstock en DEGIRO y en XTB
+      // esto cogía solo la parte de XTB y el análisis por compra, la ventana de
+      // pérdidas y la concentración la daban por un 60 % menos de lo que vale.
+      const tv=(typeof stockValor==='function')?stockValor(s.id):null;
+      currentVal=(tv!=null?tv:balEntry.amount)||0;}
     else{
       for(let i=records.length-1;i>=0;i--){
         if(records[i].stocks_data&&records[i].stocks_data[s.id]!=null){
@@ -8685,8 +8691,14 @@ function NOMINAS_TODAS(){
     const o={ym:ym.slice(0,7),nd,amt}; idx.set(k,o); out.push(o);
   };
   NOM_HIST().forEach(x=>add(String(x.ym||x.date||''),x.nd,x.amt));
+  // v162 · Un cobro del banco que en el histórico ya está partido en dos
+  // (la nómina y la sentencia, con splitFrom) no es otra nómina: se sumaba
+  // además de sus dos partes y junio de 2026 contaba dos veces en el bruto.
+  const partidos=NOM_HIST().filter(z=>z&&z.splitFrom);
   (typeof incomeLog!=='undefined'?incomeLog:[]).forEach(e=>{
     if(e.cat!=='nomina')return;
+    const ym=String(e.date||'').slice(0,7);
+    if(partidos.some(z=>String(z.ym||z.date||'').slice(0,7)===ym&&Math.abs((Number(e.amt)||0)-(Number(z.splitFrom)||0))<1))return;
     add(String(e.date||''),e.nd,e.amt);
   });
   return out;
