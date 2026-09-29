@@ -610,7 +610,7 @@ nav::-webkit-scrollbar{display:none}
 <div class="topbar">
 <header>
   <div>
-    <div class="logo">Disfruta la Vida <small>· Patrimonio · v163 · <a href="./nueva.html" style="color:inherit">versión nueva</a></small></div>
+    <div class="logo">Disfruta la Vida <small>· Patrimonio · v164 · <a href="./nueva.html" style="color:inherit">versión nueva</a></small></div>
     <div style="font-size:10px;opacity:.5;margin-top:2px" id="hdr-date"></div>
   </div>
   <div class="hdr-right">
@@ -3310,18 +3310,20 @@ function processBankRows(rows){
       // día e importe: si lo anotaste a mano con otra descripción, el extracto
       // no tiene por qué saberlo, pero el día y el importe sí coinciden.
       const _porFI=new Map();
-      const _registrar=(kind,date,amt,raw)=>{
+      const _registrar=(kind,date,amt,raw,alias)=>{
         const e={usado:false};
         const fk=kind+'|'+date+'|'+Math.round(amt*100);
         if(!_porFI.has(fk))_porFI.set(fk,[]); _porFI.get(fk).push(e);
-        _claves(kind,date,amt,raw).forEach(k=>{
+        // v164 · también por el nombre con el que vino del banco, si se lo
+        // cambiaste después (alias): si no, el siguiente extracto lo volvía a meter
+        [raw].concat(alias||[]).forEach(r=>_claves(kind,date,amt,r).forEach(k=>{
           if(!_idx.has(k))_idx.set(k,[]);
-          _idx.get(k).push(e);
-        });
+          if(!_idx.get(k).includes(e))_idx.get(k).push(e);
+        }));
         _entradas.push(e);
       };
-      incomeLog.forEach(x=>_registrar('i',x.date,x.amt,x.desc||''));
-      expenseLog.forEach(x=>_registrar('e',x.date,x.amt,x.name||''));
+      incomeLog.forEach(x=>_registrar('i',x.date,x.amt,x.desc||'',x.alias));
+      expenseLog.forEach(x=>_registrar('e',x.date,x.amt,x.name||'',x.alias));
       // «gastar» un apunte ya guardado: solo entonces la fila es un duplicado
       const yaEsta=(kind,date,amt,raw)=>{
         for(const k of _claves(kind,date,amt,raw)){
@@ -3382,6 +3384,30 @@ function processBankRows(rows){
           libre.usado=true; newInc.splice(k,1); addI--; dup++;
           dupDetalle.push(fmtDate(x.date)+'  '+fmt2(x.amt)+'€  '+String(x.desc).slice(0,20)+' (ya lo tenías con otra descripción)');
         }
+      }
+      // v164 · La nómina que entró antes desde el PDF lleva fecha del día 28 y su
+      // propio concepto; el cobro del banco llega el 27 o el 29 como «SERVICIO
+      // PUBLICO». Es el mismo dinero: el apunte del banco no entra y el de la
+      // nómina se queda con la fecha y el concepto del banco (así el siguiente
+      // extracto ya lo reconoce), sin perder su desglose. Pasó en agosto y
+      // septiembre de 2026: 1.705,34 € contados dos veces cada mes.
+      for(let k=newInc.length-1;k>=0;k--){
+        const x=newInc[k]; if(x.cat!=='nomina')continue;
+        const t=incomeLog.find(e=>String(e.id||'').startsWith('inc_nom_')&&(e.cat==='nomina'||e.cat==='extra')&&!e.deBanco
+          &&String(e.date||'').slice(0,7)===String(x.date).slice(0,7)&&Math.abs((Number(e.amt)||0)-x.amt)<0.02
+          &&Math.abs(Date.parse(e.date)-Date.parse(x.date))<=6*864e5);
+        if(t){ t.alias=t.alias||[]; if(t.desc&&!t.alias.includes(t.desc))t.alias.push(t.desc);
+          t.date=x.date; t.desc=x.desc; t.deBanco=true;
+          newInc.splice(k,1); addI--; dup++;
+          dupDetalle.push(fmtDate(x.date)+'  '+fmt2(x.amt)+'€  la nómina que ya tenías del PDF'); }
+      }
+      // v164 · Trade Republic da los intereses en bruto en el extracto y en neto
+      // (sin el 19 %) en la exportación: el mismo pago no entra dos veces.
+      for(let k=newInc.length-1;k>=0;k--){
+        const x=newInc[k]; if(!/interest|inter[eé]s/i.test(x.desc||''))continue;
+        const t=incomeLog.find(e=>e.date===x.date&&/interest|inter[eé]s/i.test(e.desc||'')&&
+          [1,0.81,1/0.81].some(f=>Math.abs((Number(e.amt)||0)*f-x.amt)<0.03));
+        if(t){ newInc.splice(k,1); addI--; dup++; dupDetalle.push(fmtDate(x.date)+'  '+fmt2(x.amt)+'€  intereses que ya tenías'); }
       }
       // v119 · Antes, si no había nada nuevo, salía un aviso de una línea y ya.
       // Con un archivo que no se lee bien el resultado es idéntico al de un
@@ -5715,7 +5741,7 @@ function addGastoEst(){
   const date=document.getElementById('gest-date')?.value||new Date().toISOString().slice(0,10);
   const editId=document.getElementById('gest-edit-id')?.value||'';
   if(!name||amt<=0){toast('Introduce descripción e importe');return;}
-  if(editId){const e=expenseLog.find(x=>x.id===editId);const oldCat=e?e.cat:null;if(e){e.name=name;e.amt=amt;e.cat=cat;e.date=date;}document.getElementById('gest-edit-id').value='';
+  if(editId){const e=expenseLog.find(x=>x.id===editId);const oldCat=e?e.cat:null;if(e){if(e.name&&e.name!==name&&/^exp_/.test(String(e.id))){e.alias=e.alias||[];if(!e.alias.includes(e.name))e.alias.push(e.name);}e.name=name;e.amt=amt;e.cat=cat;e.date=date;}   /* v164 · el nombre del banco se recuerda */document.getElementById('gest-edit-id').value='';
     if(e&&oldCat!==cat)recatByConcept(name,cat);}
   else expenseLog.push({id:'ge_'+Date.now(),date,name,amt,cat,kind:'estructural'});
   save();
@@ -5729,7 +5755,7 @@ function addGastoOcio(){
   const date=document.getElementById('gocio-date')?.value||new Date().toISOString().slice(0,10);
   const editId=document.getElementById('gocio-edit-id')?.value||'';
   if(!name||amt<=0){toast('Introduce descripción e importe');return;}
-  if(editId){const e=expenseLog.find(x=>x.id===editId);const oldCat=e?e.cat:null;if(e){e.name=name;e.amt=amt;e.cat=cat;e.date=date;}document.getElementById('gocio-edit-id').value='';
+  if(editId){const e=expenseLog.find(x=>x.id===editId);const oldCat=e?e.cat:null;if(e){if(e.name&&e.name!==name&&/^exp_/.test(String(e.id))){e.alias=e.alias||[];if(!e.alias.includes(e.name))e.alias.push(e.name);}e.name=name;e.amt=amt;e.cat=cat;e.date=date;}   /* v164 · el nombre del banco se recuerda */document.getElementById('gocio-edit-id').value='';
     if(e&&oldCat!==cat)recatByConcept(name,cat);}
   else expenseLog.push({id:'go_'+Date.now(),date,name,amt,cat,kind:'ocio'});
   save();

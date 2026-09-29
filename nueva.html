@@ -1684,18 +1684,20 @@ function processBankRows(rows){
       // día e importe: si lo anotaste a mano con otra descripción, el extracto
       // no tiene por qué saberlo, pero el día y el importe sí coinciden.
       const _porFI=new Map();
-      const _registrar=(kind,date,amt,raw)=>{
+      const _registrar=(kind,date,amt,raw,alias)=>{
         const e={usado:false};
         const fk=kind+'|'+date+'|'+Math.round(amt*100);
         if(!_porFI.has(fk))_porFI.set(fk,[]); _porFI.get(fk).push(e);
-        _claves(kind,date,amt,raw).forEach(k=>{
+        // v164 · también por el nombre con el que vino del banco, si se lo
+        // cambiaste después (alias): si no, el siguiente extracto lo volvía a meter
+        [raw].concat(alias||[]).forEach(r=>_claves(kind,date,amt,r).forEach(k=>{
           if(!_idx.has(k))_idx.set(k,[]);
-          _idx.get(k).push(e);
-        });
+          if(!_idx.get(k).includes(e))_idx.get(k).push(e);
+        }));
         _entradas.push(e);
       };
-      incomeLog.forEach(x=>_registrar('i',x.date,x.amt,x.desc||''));
-      expenseLog.forEach(x=>_registrar('e',x.date,x.amt,x.name||''));
+      incomeLog.forEach(x=>_registrar('i',x.date,x.amt,x.desc||'',x.alias));
+      expenseLog.forEach(x=>_registrar('e',x.date,x.amt,x.name||'',x.alias));
       // «gastar» un apunte ya guardado: solo entonces la fila es un duplicado
       const yaEsta=(kind,date,amt,raw)=>{
         for(const k of _claves(kind,date,amt,raw)){
@@ -1756,6 +1758,30 @@ function processBankRows(rows){
           libre.usado=true; newInc.splice(k,1); addI--; dup++;
           dupDetalle.push(fmtDate(x.date)+'  '+fmt2(x.amt)+'€  '+String(x.desc).slice(0,20)+' (ya lo tenías con otra descripción)');
         }
+      }
+      // v164 · La nómina que entró antes desde el PDF lleva fecha del día 28 y su
+      // propio concepto; el cobro del banco llega el 27 o el 29 como «SERVICIO
+      // PUBLICO». Es el mismo dinero: el apunte del banco no entra y el de la
+      // nómina se queda con la fecha y el concepto del banco (así el siguiente
+      // extracto ya lo reconoce), sin perder su desglose. Pasó en agosto y
+      // septiembre de 2026: 1.705,34 € contados dos veces cada mes.
+      for(let k=newInc.length-1;k>=0;k--){
+        const x=newInc[k]; if(x.cat!=='nomina')continue;
+        const t=incomeLog.find(e=>String(e.id||'').startsWith('inc_nom_')&&(e.cat==='nomina'||e.cat==='extra')&&!e.deBanco
+          &&String(e.date||'').slice(0,7)===String(x.date).slice(0,7)&&Math.abs((Number(e.amt)||0)-x.amt)<0.02
+          &&Math.abs(Date.parse(e.date)-Date.parse(x.date))<=6*864e5);
+        if(t){ t.alias=t.alias||[]; if(t.desc&&!t.alias.includes(t.desc))t.alias.push(t.desc);
+          t.date=x.date; t.desc=x.desc; t.deBanco=true;
+          newInc.splice(k,1); addI--; dup++;
+          dupDetalle.push(fmtDate(x.date)+'  '+fmt2(x.amt)+'€  la nómina que ya tenías del PDF'); }
+      }
+      // v164 · Trade Republic da los intereses en bruto en el extracto y en neto
+      // (sin el 19 %) en la exportación: el mismo pago no entra dos veces.
+      for(let k=newInc.length-1;k>=0;k--){
+        const x=newInc[k]; if(!/interest|inter[eé]s/i.test(x.desc||''))continue;
+        const t=incomeLog.find(e=>e.date===x.date&&/interest|inter[eé]s/i.test(e.desc||'')&&
+          [1,0.81,1/0.81].some(f=>Math.abs((Number(e.amt)||0)*f-x.amt)<0.03));
+        if(t){ newInc.splice(k,1); addI--; dup++; dupDetalle.push(fmtDate(x.date)+'  '+fmt2(x.amt)+'€  intereses que ya tenías'); }
       }
       // v119 · Antes, si no había nada nuevo, salía un aviso de una línea y ya.
       // Con un archivo que no se lee bien el resultado es idéntico al de un
@@ -4089,7 +4115,7 @@ function addGastoEst(){
   const date=document.getElementById('gest-date')?.value||new Date().toISOString().slice(0,10);
   const editId=document.getElementById('gest-edit-id')?.value||'';
   if(!name||amt<=0){toast('Introduce descripción e importe');return;}
-  if(editId){const e=expenseLog.find(x=>x.id===editId);const oldCat=e?e.cat:null;if(e){e.name=name;e.amt=amt;e.cat=cat;e.date=date;}document.getElementById('gest-edit-id').value='';
+  if(editId){const e=expenseLog.find(x=>x.id===editId);const oldCat=e?e.cat:null;if(e){if(e.name&&e.name!==name&&/^exp_/.test(String(e.id))){e.alias=e.alias||[];if(!e.alias.includes(e.name))e.alias.push(e.name);}e.name=name;e.amt=amt;e.cat=cat;e.date=date;}   /* v164 · el nombre del banco se recuerda */document.getElementById('gest-edit-id').value='';
     if(e&&oldCat!==cat)recatByConcept(name,cat);}
   else expenseLog.push({id:'ge_'+Date.now(),date,name,amt,cat,kind:'estructural'});
   save();
@@ -4103,7 +4129,7 @@ function addGastoOcio(){
   const date=document.getElementById('gocio-date')?.value||new Date().toISOString().slice(0,10);
   const editId=document.getElementById('gocio-edit-id')?.value||'';
   if(!name||amt<=0){toast('Introduce descripción e importe');return;}
-  if(editId){const e=expenseLog.find(x=>x.id===editId);const oldCat=e?e.cat:null;if(e){e.name=name;e.amt=amt;e.cat=cat;e.date=date;}document.getElementById('gocio-edit-id').value='';
+  if(editId){const e=expenseLog.find(x=>x.id===editId);const oldCat=e?e.cat:null;if(e){if(e.name&&e.name!==name&&/^exp_/.test(String(e.id))){e.alias=e.alias||[];if(!e.alias.includes(e.name))e.alias.push(e.name);}e.name=name;e.amt=amt;e.cat=cat;e.date=date;}   /* v164 · el nombre del banco se recuerda */document.getElementById('gocio-edit-id').value='';
     if(e&&oldCat!==cat)recatByConcept(name,cat);}
   else expenseLog.push({id:'go_'+Date.now(),date,name,amt,cat,kind:'ocio'});
   save();
@@ -15250,7 +15276,8 @@ __LEG.P.accionesLista=function(){ return (cfg.stocks||[]).map(s=>({id:s.id,name:
     try{contra=balContradicciones()||[];}catch(e){}
     try{const g=findDupes()||{}; dupes=(g.exp||[]).length+(g.inc||[]).length;}catch(e){}
     try{desf=records.map(r=>recCifras(r)).filter(c=>c&&c.difiere).length;}catch(e){}
-    return {contra:contra.map(x=>({})),dupes,desfasados:desf};
+    let rep=[]; try{rep=P.duplicados();}catch(e){}
+    return {contra:contra.map(x=>({})),dupes,desfasados:desf,repetidos:rep.map(o=>({tipo:o.tipo,t:o.t,date:o.date,amt:o.amt,nombre:o.nombre,queda:o.nombreQueda,desglose:!!o.desglose}))};
   };
   P.copiaJSON=function(){
     return JSON.stringify({_app:'DisfrutaLaVida-Patrimonio',_version:37,_exported:new Date().toISOString(),
@@ -15274,6 +15301,55 @@ __LEG.P.accionesLista=function(){ return (cfg.stocks||[]).map(s=>({id:s.id,name:
     if(data.personal)setPersonal(data.personal,'replace');
     migrateFundIdent(); recomputeAllStockGains(); save();
     try{ if(data._exported)localStorage.setItem('dlv_lastchange',data._exported); }catch(e){}
+  };
+})(__LEG.P);
+
+// ── Apuntes repetidos (v164) ─────────────────────────────────────────
+// Tres casos, los tres con prueba de que es el mismo dinero:
+//  · nómina del PDF (inc_nom_, día 28) y el cobro del banco del mismo mes, mismo importe
+//  · intereses de Trade Republic el mismo día, uno en bruto y otro en neto (×0,81)
+//  · un gasto que renombraste y el mismo gasto que el extracto volvió a meter:
+//    mismo día, mismo importe, un nombre contiene al otro y entró después
+(function(P){
+  const tsId=id=>{const m=String(id).match(/_(\d{13})/);return m?+m[1]:null;};
+  const pal=s=>(String(s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').match(/[a-zñ]{4,}/g)||[])
+    .filter(w=>!['compra','pago','tarjeta','recibo','transferencia','espana','sociedad'].includes(w));
+  P.duplicados=function(){
+    const ci=compIncomeIds(), ce=compExpenseIds(), out=[], usados=new Set();
+    const D=s=>Date.parse(String(s).slice(0,10));
+    const I=incomeLog.filter(x=>!_esSintetico(x)&&!ci.has(x.id)&&x.src!=='compensacion');
+    I.filter(e=>String(e.id).startsWith('inc_nom_')&&(e.cat==='nomina'||e.cat==='extra')).forEach(p=>{
+      const b=I.find(x=>x!==p&&!usados.has(x.id)&&!String(x.id).startsWith('inc_nom_')&&x.cat==='nomina'
+        &&Math.abs((+x.amt||0)-(+p.amt||0))<0.02&&String(x.date).slice(0,7)===String(p.date).slice(0,7)&&Math.abs(D(x.date)-D(p.date))<=6*864e5);
+      if(b){usados.add(b.id);out.push({tipo:'nomina',t:'i',quitar:p.id,queda:b.id,nombre:p.desc,nombreQueda:b.desc,date:b.date,amt:+b.amt,desglose:!b.nd&&!!p.nd});}
+    });
+    const INT=I.filter(x=>/interest|inter[eé]s/i.test(x.desc||''));
+    INT.forEach(a=>INT.forEach(b=>{ if(a===b||a.date!==b.date||!((+a.amt)>(+b.amt)))return;
+      if(Math.abs(a.amt*0.81-b.amt)<0.03&&!out.some(o=>o.quitar===b.id))out.push({tipo:'interes',t:'i',quitar:b.id,queda:a.id,nombre:b.desc,nombreQueda:a.desc,date:b.date,amt:+b.amt,bruto:+a.amt});}));
+    const G=expenseLog.filter(x=>!_esSintetico(x)&&!ce.has(x.id)&&x.src!=='compensacion');
+    const porDI={}; G.forEach(x=>{const k=x.date+'|'+Math.round((+x.amt||0)*100);(porDI[k]=porDI[k]||[]).push(x);});
+    Object.values(porDI).forEach(L=>{ if(L.length<2)return;
+      for(let i=0;i<L.length;i++)for(let j=0;j<L.length;j++){ const a=L[i],b=L[j]; if(i===j||usados.has(a.id)||usados.has(b.id))continue;
+        if(String(a.name||'').trim().toLowerCase()===String(b.name||'').trim().toLowerCase())continue;   // dos compras iguales: no se toca
+        const ta=tsId(a.id), tb=tsId(b.id); if(ta==null||tb==null||!(tb>ta))continue;              // b entró después
+        const pa=pal(a.name), pb=pal(b.name); if(!pb.length||!pb.some(w=>pa.some(v=>v.includes(w)||w.includes(v))))continue;
+        usados.add(a.id);usados.add(b.id);
+        out.push({tipo:'gasto',t:'g',quitar:b.id,queda:a.id,nombre:b.name,nombreQueda:a.name,date:a.date,amt:+a.amt});
+      }});
+    return out.sort((x,y)=>String(x.date).localeCompare(String(y.date)));
+  };
+  P.corregirDuplicados=function(){
+    const L=P.duplicados(); let n=0;
+    L.forEach(o=>{
+      if(o.t==='i'){ const p=incomeLog.find(x=>x.id===o.quitar), b=incomeLog.find(x=>x.id===o.queda); if(!p||!b)return;
+        if(o.tipo==='nomina'){ if(!b.nd&&p.nd)b.nd=p.nd; ['noRec','noRecAuto'].forEach(k=>{if(p[k]!=null&&b[k]==null)b[k]=p[k];}); }
+        incomeLog=incomeLog.filter(x=>x.id!==p.id); n++; }
+      else { const r=expenseLog.find(x=>x.id===o.quitar), k=expenseLog.find(x=>x.id===o.queda); if(!r||!k)return;
+        k.alias=k.alias||[]; if(r.name&&!k.alias.includes(r.name))k.alias.push(r.name);
+        if(r.pendDev&&!k.pendDev)k.pendDev=r.pendDev; if(r.noRec!=null&&k.noRec==null)k.noRec=r.noRec;
+        expenseLog=expenseLog.filter(x=>x.id!==r.id); n++; }
+    });
+    save(); return n;
   };
 })(__LEG.P);
 
@@ -15639,6 +15715,8 @@ function hoy(){
   // pendientes
   const PE=pendientes(DB);
   if(LEG.P){ const RC=Q('recat|false',P=>P.recat(false)); if(RC&&RC.n)PE.push({tipo:'recat',grave:false,texto:RC.n+' gastos sin clasificar, en «Otro»',accion:'Clasifícalos en Entra y sale',ir:'flujo',ancla:'fl-recat'});
+    const RV=Q('revision',P=>P.revision()); if(RV&&RV.repetidos&&RV.repetidos.length){ const ri=RV.repetidos.filter(x=>x.t==='i').reduce((t,x)=>t+x.amt,0);
+      PE.push({tipo:'repetidos',grave:true,texto:RV.repetidos.length+' apuntes repetidos'+(ri?': '+eur(ri,0)+' de ingresos contados dos veces':''),accion:'Quítalos en el Buzón',ir:'buzon',ancla:'bz-revision'}); }
     const CS=Q('cobsin',P=>P.cobradosSinCompensar())||[]; CS.forEach(x=>PE.push({tipo:'comp',grave:true,texto:x.name+' ('+eur(x.amt)+') ya te lo devolvieron, pero el pago y la devolución cuentan los dos',accion:'Compénsalos en Entra y sale',ir:'flujo',ancla:'fl-comp'})); }
   else setTimeout(()=>{ try{ puente(); if(actual==='hoy')pintar(); }catch(e){} },60);
   h+='<h2>'+(PE.length?'Te toca':'Nada pendiente')+'</h2>';
@@ -17379,8 +17457,13 @@ function extrasBuzon(){
   s+='</div>';
   // ── Revisión ──
   const R=Q('revision',P=>P.revision());
-  if(R&&(R.contra.length||R.dupes||R.desfasados)){
-    s+='<h2>Revisión de tus datos</h2><ul class="pend">'+
+  if(R&&(R.contra.length||R.dupes||R.desfasados||R.repetidos.length)){
+    const RP=R.repetidos, ri=RP.filter(x=>x.t==='i').reduce((t,x)=>t+x.amt,0), rg=RP.filter(x=>x.t==='g').reduce((t,x)=>t+x.amt,0);
+    const qué={nomina:'la nómina del PDF y el cobro del banco son el mismo dinero',interes:'los mismos intereses en bruto y en neto',gasto:'el gasto que renombraste y el extracto volvió a meter'};
+    s+='<h2 id="bz-revision">Revisión de tus datos</h2><ul class="pend">'+
+      (RP.length?'<li><span class="marca grave"></span><div><div class="que">'+RP.length+' apuntes repetidos: '+(ri?'<span class="num">'+eur(ri)+'</span> de ingresos':'')+(ri&&rg?' y ':'')+(rg?'<span class="num">'+eur(rg)+'</span> de gastos':'')+' contados dos veces.</div>'+
+        '<ul class="lista-simple">'+RP.map(x=>'<li><span>'+fecha(x.date)+', '+esc(x.nombre)+'<small>'+qué[x.tipo]+'. Queda «'+esc(x.queda)+'»'+(x.desglose?', con el desglose de la nómina':'')+'.</small></span><b class="num">'+eur(x.amt)+'</b></li>').join('')+'</ul>'+
+        '<div class="hacer"><button type="button" class="btn" id="rv-repetidos">Quitar los repetidos</button></div></div></li>':'')+
       (R.contra.length?'<li><span class="marca"></span><div><div class="que">'+R.contra.length+' saldos con dos cifras distintas el mismo día. La app usa siempre el último que metiste; el otro no cambia nada, pero viaja en cada copia.</div>'+
         '<div class="hacer"><button type="button" class="enlace" id="rv-contra">Quedarme con el último</button></div></div></li>':'')+
       (R.dupes?'<li><span class="marca"></span><div><div class="que">'+R.dupes+' posibles duplicados.</div><div class="hacer"><button type="button" class="enlace" id="rv-dupes">Revisarlos y limpiar</button></div></div></li>':'')+
@@ -17413,6 +17496,7 @@ function enlazarExtrasBuzon(){
   const cc=$('#rv-contra'); if(cc)cc.onclick=()=>cambiar('saldos contradictorios limpiados',()=>E('balLimpiarContradicciones()'));
   const du=$('#rv-dupes'); if(du)du.onclick=()=>cambiar('duplicados limpiados',()=>E('diagCleanDupes()'),{verAvisos:true});
   const df=$('#rv-desf'); if(df)df.onclick=()=>cambiar('meses guardados al día',()=>E('recPonerAlDia()'));
+  const rr=$('#rv-repetidos'); if(rr)rr.onclick=()=>cambiar('quitados los apuntes repetidos',()=>E('__LEG.P.corregirDuplicados()'));
   document.querySelectorAll('[data-quitar]').forEach(b=>b.onclick=()=>{const [t,id]=b.dataset.quitar.split('|');
     if(!confirm('¿Quitarlo? Sus apuntes se quedan, pero deja de contar.'))return;
     const f={acc:'removeAccount',fund:'removeFund',broker:'removeBroker',debt:'removeDebt'}[t];
