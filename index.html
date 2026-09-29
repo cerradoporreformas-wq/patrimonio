@@ -610,7 +610,7 @@ nav::-webkit-scrollbar{display:none}
 <div class="topbar">
 <header>
   <div>
-    <div class="logo">Disfruta la Vida <small>· Patrimonio · v162 · <a href="./nueva.html" style="color:inherit">versión nueva</a></small></div>
+    <div class="logo">Disfruta la Vida <small>· Patrimonio · v163 · <a href="./nueva.html" style="color:inherit">versión nueva</a></small></div>
     <div style="font-size:10px;opacity:.5;margin-top:2px" id="hdr-date"></div>
   </div>
   <div class="hdr-right">
@@ -6733,7 +6733,7 @@ function ahCatQuickRange(which){
   _ahCatFrom=from;_ahCatTo=to;ahCatSyncInputs();renderAhorroCats();
 }
 function setAhCatPeriod(p){_ahCatPeriod=p;document.querySelectorAll('.ah-catper').forEach(b=>b.classList.toggle('active',b.dataset.per===p));renderAhorroCats();}
-function compIncomeIds(){const s=new Set();reembolsos.forEach(r=>{if(r.incomeId)s.add(r.incomeId);});return s;}
+function compIncomeIds(){const s=new Set();reembolsos.forEach(r=>{if(r.incomeId)s.add(r.incomeId);(r.incomeIds||[]).forEach(i=>s.add(i));});return s;}  // v163 · una compensación puede llevar varios ingresos
 function compExpenseIds(){const s=new Set();reembolsos.forEach(r=>{(r.expenseIds||[]).forEach(e=>s.add(e));});return s;}
 
 // ════════════════════════════════════════════════════════════════════
@@ -7012,7 +7012,10 @@ function reembSave(){
 function reembUndo(id){
   const rb=reembolsos.find(r=>r.id===id); if(!rb)return;
   if(!confirm('Deshacer esta compensación. El ingreso y sus gastos volverán a contar en ingresos, gastos y ahorro. ¿Continuar?'))return;
-  reembolsos=reembolsos.filter(r=>r.id!==id); save();
+  reembolsos=reembolsos.filter(r=>r.id!==id);
+  // v163 · si al compensar quedó una diferencia apuntada aparte, se va con ella
+  if(rb.resto&&rb.resto.id){ expenseLog=expenseLog.filter(x=>x.id!==rb.resto.id); incomeLog=incomeLog.filter(x=>x.id!==rb.resto.id); }
+  save();
   renderReembolsos(); loadMonthEntries(); renderTxIngList(); renderGastosList(); renderAll();
   toast('Compensación deshecha');
 }
@@ -7052,7 +7055,9 @@ function renderReembList(){
   });
   let totInc=0,totExp=0;
   const html=rows.map(rb=>{
-    const inc=incomeLog.find(x=>x.id===rb.incomeId);
+    // v163 · puede haber varios ingresos (cada uno te paga su parte de una comida)
+    const incs=((rb.incomeIds&&rb.incomeIds.length)?rb.incomeIds:[rb.incomeId]).map(i=>incomeLog.find(x=>x.id===i)).filter(Boolean);
+    const inc=incs.length===1?incs[0]:(incs.length?{date:incs[0].date,desc:incs.length+' ingresos: '+incs.map(x=>x.desc||'').join(', '),amt:incs.reduce((s,x)=>s+(x.amt||0),0)}:null);
     const incAmt=inc?(inc.amt||0):0; totInc+=incAmt;
     const exps=(rb.expenseIds||[]).map(eid=>expenseLog.find(x=>x.id===eid)).filter(Boolean);
     const sum=exps.reduce((s,e)=>s+(e.amt||0),0); totExp+=sum;
@@ -14449,7 +14454,8 @@ function fiscalCfg(){
 function fiscalPagos(){
   // pagos ya hechos a Hacienda, para deducir el patrón
   const cats=Object.entries(cfg.customCats||{}).filter(([k,v])=>/impuesto|hacienda|tribut/i.test(v)).map(([k])=>k);
-  return expenseLog.filter(x=>cats.includes(x.cat)&&(Number(x.amt)||0)>400
+  const comp=compExpenseIds();   // v163 · un pago que Hacienda te devolvió y has compensado tampoco
+  return expenseLog.filter(x=>cats.includes(x.cat)&&(Number(x.amt)||0)>400&&!comp.has(x.id)
       &&!((typeof pendDev==='function')&&pendDev(x)>0))   // un duplicado reclamado no es tu carga fiscal
     .sort((a,b)=>String(a.date).localeCompare(String(b.date)));
 }

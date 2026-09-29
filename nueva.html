@@ -5106,7 +5106,7 @@ function ahCatQuickRange(which){
   _ahCatFrom=from;_ahCatTo=to;ahCatSyncInputs();renderAhorroCats();
 }
 function setAhCatPeriod(p){_ahCatPeriod=p;document.querySelectorAll('.ah-catper').forEach(b=>b.classList.toggle('active',b.dataset.per===p));renderAhorroCats();}
-function compIncomeIds(){const s=new Set();reembolsos.forEach(r=>{if(r.incomeId)s.add(r.incomeId);});return s;}
+function compIncomeIds(){const s=new Set();reembolsos.forEach(r=>{if(r.incomeId)s.add(r.incomeId);(r.incomeIds||[]).forEach(i=>s.add(i));});return s;}  // v163 · una compensación puede llevar varios ingresos
 function compExpenseIds(){const s=new Set();reembolsos.forEach(r=>{(r.expenseIds||[]).forEach(e=>s.add(e));});return s;}
 
 // ════════════════════════════════════════════════════════════════════
@@ -5385,7 +5385,10 @@ function reembSave(){
 function reembUndo(id){
   const rb=reembolsos.find(r=>r.id===id); if(!rb)return;
   if(!confirm('Deshacer esta compensación. El ingreso y sus gastos volverán a contar en ingresos, gastos y ahorro. ¿Continuar?'))return;
-  reembolsos=reembolsos.filter(r=>r.id!==id); save();
+  reembolsos=reembolsos.filter(r=>r.id!==id);
+  // v163 · si al compensar quedó una diferencia apuntada aparte, se va con ella
+  if(rb.resto&&rb.resto.id){ expenseLog=expenseLog.filter(x=>x.id!==rb.resto.id); incomeLog=incomeLog.filter(x=>x.id!==rb.resto.id); }
+  save();
   renderReembolsos(); loadMonthEntries(); renderTxIngList(); renderGastosList(); renderAll();
   toast('Compensación deshecha');
 }
@@ -5425,7 +5428,9 @@ function renderReembList(){
   });
   let totInc=0,totExp=0;
   const html=rows.map(rb=>{
-    const inc=incomeLog.find(x=>x.id===rb.incomeId);
+    // v163 · puede haber varios ingresos (cada uno te paga su parte de una comida)
+    const incs=((rb.incomeIds&&rb.incomeIds.length)?rb.incomeIds:[rb.incomeId]).map(i=>incomeLog.find(x=>x.id===i)).filter(Boolean);
+    const inc=incs.length===1?incs[0]:(incs.length?{date:incs[0].date,desc:incs.length+' ingresos: '+incs.map(x=>x.desc||'').join(', '),amt:incs.reduce((s,x)=>s+(x.amt||0),0)}:null);
     const incAmt=inc?(inc.amt||0):0; totInc+=incAmt;
     const exps=(rb.expenseIds||[]).map(eid=>expenseLog.find(x=>x.id===eid)).filter(Boolean);
     const sum=exps.reduce((s,e)=>s+(e.amt||0),0); totExp+=sum;
@@ -12822,7 +12827,8 @@ function fiscalCfg(){
 function fiscalPagos(){
   // pagos ya hechos a Hacienda, para deducir el patrón
   const cats=Object.entries(cfg.customCats||{}).filter(([k,v])=>/impuesto|hacienda|tribut/i.test(v)).map(([k])=>k);
-  return expenseLog.filter(x=>cats.includes(x.cat)&&(Number(x.amt)||0)>400
+  const comp=compExpenseIds();   // v163 · un pago que Hacienda te devolvió y has compensado tampoco
+  return expenseLog.filter(x=>cats.includes(x.cat)&&(Number(x.amt)||0)>400&&!comp.has(x.id)
       &&!((typeof pendDev==='function')&&pendDev(x)>0))   // un duplicado reclamado no es tu carga fiscal
     .sort((a,b)=>String(a.date).localeCompare(String(b.date)));
 }
@@ -14850,22 +14856,58 @@ __LEG.P={};
       grupos:_recatCache.map((g,i)=>{const s=recatSuggest(g);return {i,key:g.key,sample:g.sample,n:g.items.length,
         total:g.total,last:g.last,sug:s?{cat:s.cat,why:s.why,weak:!!s.weak}:null,ig:ig.has(g.key)};})};
   };
-  // ── Compensaciones (renderReembList) ──
+  // ── Compensaciones (renderReembList), ya con varios ingresos por compensación ──
   P.reemb=function(){
     return reembolsos.map(rb=>{
-      const inc=incomeLog.find(x=>x.id===rb.incomeId);
+      const ids=(rb.incomeIds&&rb.incomeIds.length)?rb.incomeIds:[rb.incomeId];
+      const incs=ids.map(i=>incomeLog.find(x=>x.id===i)).filter(Boolean);
       const exps=(rb.expenseIds||[]).map(eid=>expenseLog.find(x=>x.id===eid)).filter(Boolean);
-      return {id:rb.id,inc:inc?{date:inc.date,desc:inc.desc,amt:Number(inc.amt)||0}:null,
-        exps:exps.map(e=>({date:e.date,name:e.name,amt:Number(e.amt)||0,nota:(rb.notes||{})[e.id]||''})),
-        faltan:(rb.expenseIds||[]).length-exps.length};
-    }).sort((a,b)=>String((b.inc||{}).date||'').localeCompare(String((a.inc||{}).date||'')));
+      return {id:rb.id,
+        incs:incs.map(x=>({date:x.date,desc:x.desc||'',amt:Number(x.amt)||0})),
+        exps:exps.map(e=>({date:e.date,name:e.name||'',amt:Number(e.amt)||0,nota:(rb.notes||{})[e.id]||''})),
+        resto:rb.resto||null,faltan:(ids.length-incs.length)+((rb.expenseIds||[]).length-exps.length),
+        fecha:[...incs.map(x=>x.date),...exps.map(x=>x.date)].sort().pop()||''};
+    }).sort((a,b)=>String(b.fecha).localeCompare(String(a.fecha)));
   };
   P.reembCandidatos=function(){
-    const ui=compIncomeIds(), ue=compExpenseIds();
-    return {ing:incomeLog.filter(x=>!ui.has(x.id)&&!_esSintetico(x)).map(x=>({id:x.id,date:x.date,desc:x.desc||'',cat:x.cat,amt:Number(x.amt)||0}))
+    const ui=compIncomeIds(), ue=compExpenseIds(), IC=P.catsIngreso();
+    const ok=x=>!_esSintetico(x)&&x.src!=='compensacion';
+    return {ing:incomeLog.filter(x=>!ui.has(x.id)&&ok(x)).map(x=>({id:x.id,date:x.date,desc:x.desc||'',cat:x.cat,label:IC[x.cat]||x.cat,amt:Number(x.amt)||0}))
         .sort((a,b)=>String(b.date).localeCompare(String(a.date))),
-      gas:expenseLog.filter(x=>!ue.has(x.id)&&!_esSintetico(x)).map(x=>({id:x.id,date:x.date,desc:x.name||'',cat:x.cat,amt:Number(x.amt)||0}))
+      gas:expenseLog.filter(x=>!ue.has(x.id)&&ok(x)).map(x=>({id:x.id,date:x.date,desc:x.name||'',cat:x.cat,label:CAT_LABELS[x.cat]||x.cat||'Otro',amt:Number(x.amt)||0}))
         .sort((a,b)=>String(b.date).localeCompare(String(a.date)))};
+  };
+  // Compensar: varios gastos con varios ingresos. Lo que no cuadra no se pierde:
+  // se apunta aparte como gasto tuyo (tu parte de la comida) o como ingreso
+  // (los intereses que Hacienda suma a una devolución), y se va si se deshace.
+  P.compensar=function(o){
+    const ui=compIncomeIds(), ue=compExpenseIds(), r2=v=>Math.round(v*100)/100;
+    const I=(o.ingresos||[]).map(id=>incomeLog.find(x=>x.id===id)).filter(Boolean);
+    const G=(o.gastos||[]).map(id=>expenseLog.find(x=>x.id===id)).filter(Boolean);
+    if(!I.length||!G.length)throw new Error('Marca al menos un gasto y un ingreso.');
+    if(I.some(x=>ui.has(x.id))||G.some(x=>ue.has(x.id)))throw new Error('Alguno de los marcados ya está en otra compensación.');
+    const tI=I.reduce((s,x)=>s+(Number(x.amt)||0),0), tG=G.reduce((s,x)=>s+(Number(x.amt)||0),0), dif=r2(tI-tG);
+    const rb={id:'rb_'+Date.now().toString(36)+Math.random().toString(36).slice(2,6),incomeId:I[0].id,incomeIds:I.map(x=>x.id),
+      expenseIds:G.map(x=>x.id),notes:o.notas||{},created:new Date().toISOString()};
+    if(o.resto&&Math.abs(dif)>=0.01){
+      if(dif<0){ const base=G.slice().sort((a,b)=>(b.amt||0)-(a.amt||0))[0], id='comp_'+rb.id+'_g';
+        expenseLog.push({id,date:base.date,name:(base.name||'Gasto')+' (tu parte)',amt:r2(-dif),cat:base.cat||'otro',kind:base.kind==='fijo'?'estructural':(base.kind||'estructural'),src:'compensacion',compId:rb.id});
+        rb.resto={t:'g',id,amt:r2(-dif)}; }
+      else { const base=I.slice().sort((a,b)=>(b.amt||0)-(a.amt||0))[0], id='comp_'+rb.id+'_i';
+        incomeLog.push({id,date:base.date,desc:(base.desc||'Ingreso')+' (lo que sobra)',amt:r2(dif),cat:base.cat||'otro2',src:'compensacion',compId:rb.id});
+        rb.resto={t:'i',id,amt:r2(dif)}; }
+    }
+    // lo que estaba pendiente de cobro y ahora se compensa ya está cobrado
+    G.forEach(x=>{ if(x.pendDev&&!x.pendDev.cobrado)x.pendDev.cobrado=todayISO(); });
+    reembolsos.push(rb); save();
+    return {id:rb.id,dif,resto:rb.resto};
+  };
+  // Marcados como cobrados que siguen contando como gasto: la devolución está
+  // en otro apunte y hay que compensarla con él
+  P.cobradosSinCompensar=function(){
+    const ue=compExpenseIds();
+    return expenseLog.filter(x=>x.pendDev&&x.pendDev.cobrado&&!ue.has(x.id))
+      .map(x=>({id:x.id,date:x.date,name:x.name||'',amt:Number(x.amt)||0,cobrado:x.pendDev.cobrado}));
   };
   P.pendDev=function(){return pendDevLista();};
   P.reglas=function(){return {reglas:(cfg.catRules||[]).map((r,i)=>({i,m:r.m,cat:r.cat,label:CAT_LABELS[r.cat]||r.cat})),
@@ -15178,7 +15220,17 @@ __LEG.P.accionesLista=function(){ return (cfg.stocks||[]).map(s=>({id:s.id,name:
   toast=function(m){ (__LEG.toasts=__LEG.toasts||[]).push(String(m)); };
   P.listas=function(){
     const agg=getStockAggregates();
-    return {cuentas:(cfg.accounts||[]).map(a=>({id:a.id,name:a.name})),fondos:(cfg.funds||[]).map(f=>({id:f.id,name:f.name})),
+    // participaciones para el valor liquidativo: las últimas apuntadas más las
+    // de las aportaciones posteriores que llevan su valor liquidativo
+    const fondos=(cfg.funds||[]).map(f=>{
+      const B=balanceLog.filter(b=>b.refType==='fund'&&b.refId===f.id).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
+      const conP=B.find(b=>Number(b.parts)>0), desde=conP?conP.date:null, base=conP?Number(conP.parts):fundParts(f.id);
+      const ap=transactions.filter(t=>t.type==='fund_aport'&&(t.fundId===f.id||t.stockId===f.id)&&desde&&t.date>desde);
+      const apP=ap.filter(t=>Number(t.participaciones)>0);
+      return {id:f.id,name:f.name,sug:Math.round((base+apP.reduce((s,t)=>s+Number(t.participaciones),0))*1e6)/1e6,
+        base,desde,nAp:apP.length,sinVL:ap.length-apP.length,ultVL:B[0]&&B[0].vl?B[0].vl:null,ultFecha:B[0]?B[0].date:null};
+    });
+    return {cuentas:(cfg.accounts||[]).map(a=>({id:a.id,name:a.name})),fondos,
       brokers:(cfg.brokers||[]).map(b=>({id:b.id,name:b.name})),deudas:(cfg.debts||[]).map(d=>({id:d.id,name:d.name})),
       acciones:(cfg.stocks||[]).map(s=>({id:s.id,name:s.name,titulos:agg[s.id]?agg[s.id].totalShares:0})).sort((a,b)=>a.name.localeCompare(b.name,'es')),
       cats:P.cats(),catsIng:P.catsIngreso(),fijos:(cfg.gastos_fijos||[]).map(f=>({id:f.id,name:f.name})),
@@ -15577,7 +15629,8 @@ function hoy(){
   }
   // pendientes
   const PE=pendientes(DB);
-  if(LEG.P){ const RC=Q('recat|false',P=>P.recat(false)); if(RC&&RC.n)PE.push({tipo:'recat',grave:false,texto:RC.n+' gastos sin clasificar, en «Otro»',accion:'Clasifícalos en Entra y sale',ir:'flujo',ancla:'fl-recat'}); }
+  if(LEG.P){ const RC=Q('recat|false',P=>P.recat(false)); if(RC&&RC.n)PE.push({tipo:'recat',grave:false,texto:RC.n+' gastos sin clasificar, en «Otro»',accion:'Clasifícalos en Entra y sale',ir:'flujo',ancla:'fl-recat'});
+    const CS=Q('cobsin',P=>P.cobradosSinCompensar())||[]; CS.forEach(x=>PE.push({tipo:'comp',grave:true,texto:x.name+' ('+eur(x.amt)+') ya te lo devolvieron, pero el pago y la devolución cuentan los dos',accion:'Compénsalos en Entra y sale',ir:'flujo',ancla:'fl-comp'})); }
   else setTimeout(()=>{ try{ puente(); if(actual==='hoy')pintar(); }catch(e){} },60);
   h+='<h2>'+(PE.length?'Te toca':'Nada pendiente')+'</h2>';
   h+=PE.length?('<ul class="pend">'+PE.map(p=>'<li class="'+(p.grave?'grave':'')+'"><span class="marca"></span>'+
@@ -16309,7 +16362,7 @@ function enlazarComun(){
 // media te esconde» (ahorro sostenible), «Salud financiera» (colchón, gasto),
 // «Pagado pero te lo deben», «Consultas», el histórico mensual y los
 // formularios de ingresos, gastos, Bizum, clasificación y reglas.
-const FL={per:'12m',desde:null,hasta:null,q:'',tipo:'todo',cat:null,abierto:null,mas:0,verMeses:false,reemb:null,verIg:false};
+const FL={per:'12m',desde:null,hasta:null,q:'',tipo:'todo',cat:null,abierto:null,mas:0,verMeses:false,comp:null,verIg:false};
 function flRango(){
   const R=Q('rangos',P=>P.rangos());
   if(FL.per!=='otro'){ [FL.desde,FL.hasta]=R[FL.per]; }
@@ -16403,11 +16456,14 @@ function pFlujo(){
   // ── Bizum y compensaciones ──
   s+=seccionReemb();
   // ── Te lo deben ──
-  const PD=Q('penddev',P=>P.pendDev());
+  const PD=Q('penddev',P=>P.pendDev()), CS=Q('cobsin',P=>P.cobradosSinCompensar())||[];
   s+='<h2>Te lo deben</h2>';
+  if(CS.length)s+='<div class="aviso mal">'+CS.map(x=>esc(x.name)+', '+fecha(x.date)+' (<span class="num">'+eur(x.amt)+'</span>): lo marcaste como cobrado el '+fecha(x.cobrado)+
+    ', pero el pago sigue contando como gasto y la devolución como ingreso. <button type="button" class="enlace" data-cpabrir="g|'+x.id+'">Compensarlo con la devolución</button>').join('<br>')+'</div>';
   if(!PD||!PD.length)s+=vacio('Nada pendiente de cobro. Si pagas algo que te van a devolver, búscalo en Movimientos y márcalo: dejará de contar como gasto tuyo sin dejar de estar apuntado.');
   else s+='<ul class="lista-simple">'+PD.map(x=>'<li><span>'+esc(x.name)+', '+fecha(x.date)+(x.nota?' <small>'+esc(x.nota)+'</small>':'')+'</span><b class="num">'+eur(x.imp)+'</b>'+
-    '<button type="button" class="enlace" data-dev-cobrado="'+x.id+'">Cobrado</button><button type="button" class="enlace" data-dev-quitar="'+x.id+'">Ya no</button></li>').join('')+'</ul>';
+    '<button type="button" class="enlace" data-cpabrir="g|'+x.id+'">Ya me lo devolvieron</button><button type="button" class="enlace" data-dev-quitar="'+x.id+'">Ya no me lo deben</button></li>').join('')+'</ul>'+
+    '<p class="pie">Cuando llegue la devolución, «Ya me lo devolvieron» te deja elegir el ingreso con el que se compensa.</p>';
   // ── Reglas ──
   s+=seccionReglas();
   return s;
@@ -16448,6 +16504,7 @@ function listaMovs(f,max){
         '<div class="acciones"><button type="button" class="btn sec" data-mvnr="'+k+'">Guardar</button></div>';
       if(x.t==='g')r+=campo('Te lo tienen que devolver',inp('mv-dev-'+k,x.dev>0?String(x.dev).replace('.',','):'',{ph:'importe',attr:' inputmode="decimal"'}))+
         campo('Por qué',inp('mv-devn-'+k,'',{ph:'Reclamado, pendiente de devolución'}))+'<div class="acciones"><button type="button" class="btn sec" data-mvdev="'+k+'">Guardar</button></div>';
+      if(!x.comp)r+='<div class="acciones"><button type="button" class="btn sec" data-cpabrir="'+x.t+'|'+x.id+'">Compensar con otro apunte</button></div>';
       r+='<div class="acciones"><button type="button" class="btn peligro" data-mvdel="'+k+'">Borrar este '+(x.t==='g'?'gasto':'ingreso')+'</button></div></div>';
     }
     return r+'</li>';
@@ -16457,34 +16514,62 @@ function listaMovs(f,max){
 }
 function seccionReemb(){
   const L=Q('reemb',P=>P.reemb())||[];
-  let s='<h2 id="fl-bizum">Bizum y compensaciones</h2>';
-  const ti=L.reduce((t,r)=>t+(r.inc?r.inc.amt:0),0), tg=L.reduce((t,r)=>t+r.exps.reduce((a,e)=>a+e.amt,0),0);
-  s+='<p class="pie">Empareja un ingreso, como un Bizum que te devuelven, con el gasto o gastos que cubre: los dos dejan de contar en ingresos, gastos y ahorro.'+
-    (L.length?' Llevas '+L.length+' compensaciones: <span class="num">'+eur(ti,0)+'</span> de ingresos y <span class="num">'+eur(tg,0)+'</span> de gastos fuera.':'')+'</p>';
-  if(!FL.reemb)s+='<div class="acciones"><button type="button" class="btn" id="rb-nueva">Nueva compensación</button></div>';
-  else s+=formReemb();
-  if(L.length)s+=plegable('rb-lista','Ver las '+L.length+' compensaciones','<ul class="reemb">'+L.map(r=>'<li><div><b>'+(r.inc?esc(r.inc.desc)+', '+fecha(r.inc.date)+' <span class="num pos">+'+eur(r.inc.amt)+'</span>':'Ingreso que ya no existe')+'</b>'+
-    '<ul>'+r.exps.map(e=>'<li>'+esc(e.name)+', '+fecha(e.date)+' <span class="num">'+eur(e.amt)+'</span>'+(e.nota?' <small>'+esc(e.nota)+'</small>':'')+'</li>').join('')+(r.faltan?'<li><small>'+r.faltan+' gasto(s) que ya no existen</small></li>':'')+'</ul></div>'+
-    '<button type="button" class="enlace" data-rbundo="'+r.id+'">Deshacer</button></li>').join('')+'</ul>');
+  let s='<h2 id="fl-comp">Compensaciones</h2>';
+  s+='<p class="pie">Junta gastos e ingresos que se anulan entre sí: un Bizum que te devuelve una compra, la devolución de Hacienda de un pago, una comida que pagaste tú y te pagan entre varios. '+
+    'Dejan de contar en ingresos, gastos y ahorro. Si no cuadran, la diferencia se queda como gasto o ingreso tuyo.</p>';
+  if(!FL.comp)s+='<div class="acciones"><button type="button" class="btn" id="cp-nueva">Compensar</button></div>';
+  else s+=formComp();
+  if(L.length){
+    const ti=L.reduce((t,r)=>t+r.incs.reduce((a,x)=>a+x.amt,0),0), tg=L.reduce((t,r)=>t+r.exps.reduce((a,e)=>a+e.amt,0),0);
+    s+=plegable('rb-lista','Ver las '+L.length+' compensaciones ('+eur(ti,0)+' de ingresos y '+eur(tg,0)+' de gastos fuera)','<ul class="reemb">'+L.map(r=>'<li><div>'+
+      '<ul>'+r.incs.map(x=>'<li><span class="pos">+'+eur(x.amt)+'</span> '+esc(x.desc)+', '+fecha(x.date)+'</li>').join('')+
+      r.exps.map(e=>'<li><span class="neg">−'+eur(e.amt)+'</span> '+esc(e.name)+', '+fecha(e.date)+(e.nota?' <small>'+esc(e.nota)+'</small>':'')+'</li>').join('')+
+      (r.resto?'<li><small>Queda aparte '+(r.resto.t==='g'?'un gasto tuyo':'un ingreso')+' de <span class="num">'+eur(r.resto.amt)+'</span></small></li>':'')+
+      (r.faltan?'<li><small>'+r.faltan+' apunte(s) que ya no existen</small></li>':'')+'</ul></div>'+
+      '<button type="button" class="enlace" data-rbundo="'+r.id+'">Deshacer</button></li>').join('')+'</ul>');
+  }
   return s;
 }
-function formReemb(){
-  const C=Q('rbcand',P=>P.reembCandidatos()), F=FL.reemb;
-  const q=String(F.qi||'').toLowerCase();
-  const ings=C.ing.filter(x=>!q||(x.desc+' '+x.cat).toLowerCase().includes(q)).slice(0,150);
-  let s='<div class="bloque"><h3>Nueva compensación</h3>'+
-    campo('1. El ingreso',inp('rb-qi',F.qi,{ph:'filtra: bizum, antonio…'})+sel('rb-inc',[['','Elige el ingreso']].concat(ings.map(x=>[x.id,fecha(x.date)+', '+x.desc.slice(0,38)+', '+eur(x.amt)])),F.inc||''));
-  if(F.inc){
-    const inc=C.ing.find(x=>x.id===F.inc)||{amt:0};
-    const qg=String(F.qg||'').toLowerCase();
-    const gs=C.gas.filter(x=>x.date>=F.desde&&x.date<=F.hasta&&(!qg||x.desc.toLowerCase().includes(qg))).slice(0,120);
-    const selT=Object.keys(F.sel).map(id=>C.gas.find(x=>x.id===id)).filter(Boolean).reduce((t,x)=>t+x.amt,0);
-    s+='<p class="estado">2. Los gastos que cubre</p><div class="rango">'+campo('Texto',inp('rb-qg',F.qg,{ph:'amazon…'}))+campo('Desde','<input type="date" id="rb-d" value="'+F.desde+'">')+campo('Hasta','<input type="date" id="rb-h" value="'+F.hasta+'">')+'</div>'+
-      (gs.length?'<ul class="checks">'+gs.map(x=>'<li><label><input type="checkbox" data-rbsel="'+x.id+'"'+(F.sel[x.id]?' checked':'')+'> <span class="num">'+fecha(x.date)+'</span> '+esc(x.desc.slice(0,40))+' <b class="num">'+eur(x.amt)+'</b></label>'+
-        (F.sel[x.id]?inp('rb-n-'+x.id,F.notas[x.id]||'',{ph:'nota, por ejemplo secador',attr:' class="corto" data-rbnota="'+x.id+'"'}):'')+'</li>').join('')+'</ul>':vacio('No hay gastos sin compensar con ese filtro. Amplía las fechas o borra el texto.'))+
-      '<p class="estado">Ingreso <b class="num">'+eur(inc.amt)+'</b>, gastos marcados <b class="num">'+eur(selT)+'</b>. No hace falta que cuadren al céntimo.</p>';
+// Abre el formulario con un apunte ya marcado y las fechas de alrededor
+function abrirComp(t,id){
+  const C=Q('rbcand',P=>P.reembCandidatos());
+  const x=(t==='g'?C.gas:C.ing).find(y=>y.id===id);
+  const F={g:{},i:{},qg:'',qi:'',desde:'',hasta:'',resto:true,notas:{},pre:x?t:null};
+  if(x){ F[t][id]=true; const d=new Date(x.date+'T00:00:00'), a=new Date(d), z=new Date(d);
+    a.setDate(a.getDate()-120); z.setDate(z.getDate()+120);
+    F.desde=a.toISOString().slice(0,10); F.hasta=(z.toISOString().slice(0,10)<HOY()?z.toISOString().slice(0,10):HOY()); }
+  else { const d=new Date(HOY()+'T00:00:00'); d.setDate(d.getDate()-90); F.desde=d.toISOString().slice(0,10); F.hasta=HOY(); }
+  FL.comp=F; FL.abierto=null; pintar();
+  setTimeout(()=>{const e=document.getElementById('fl-comp');if(e)e.scrollIntoView({block:'start'});},30);
+}
+function formComp(){
+  const C=Q('rbcand',P=>P.reembCandidatos()), F=FL.comp;
+  const selG=C.gas.filter(x=>F.g[x.id]), selI=C.ing.filter(x=>F.i[x.id]);
+  const tG=selG.reduce((s,x)=>s+x.amt,0), tI=selI.reduce((s,x)=>s+x.amt,0), dif=Math.round((tI-tG)*100)/100;
+  // lo que falta por cuadrar, para poner primero lo que más se le parece
+  const falta=Math.abs(dif);
+  const orden=(L,lado)=>{ const hay=(lado==='g'?selI.length:selG.length)>0&&falta>0.009;
+    return hay?L.slice().sort((a,b)=>Math.abs(a.amt-falta)-Math.abs(b.amt-falta)||String(b.date).localeCompare(String(a.date))):L; };
+  const lista=(L,lado,q)=>{ q=String(q||'').toLowerCase();
+    const V=orden(L.filter(x=>!(lado==='g'?F.g:F.i)[x.id]&&x.date>=F.desde&&x.date<=F.hasta&&(!q||(x.desc+' '+x.label).toLowerCase().includes(q))),lado).slice(0,50);
+    return V.length?'<ul class="checks">'+V.map(x=>'<li><label><input type="checkbox" data-cp="'+lado+'|'+x.id+'"> <span class="num">'+fecha(x.date)+'</span> '+esc(x.desc.slice(0,42))+
+      ' <b class="num '+(lado==='i'?'pos':'')+'">'+(lado==='i'?'+':'')+eur(x.amt)+'</b></label></li>').join('')+'</ul>':vacio('Nada con ese filtro entre esas fechas.'); };
+  let s='<div class="bloque"><h3>Nueva compensación</h3>';
+  s+=(selG.length||selI.length)?'<ul class="lista-simple">'+selG.map(x=>'<li><span>'+esc(x.desc)+'<small>'+fecha(x.date)+', gasto</small></span><b class="num neg">−'+eur(x.amt)+'</b><button type="button" class="enlace" data-cpx="g|'+x.id+'">Quitar</button></li>').join('')+
+      selI.map(x=>'<li><span>'+esc(x.desc)+'<small>'+fecha(x.date)+', ingreso</small></span><b class="num pos">+'+eur(x.amt)+'</b><button type="button" class="enlace" data-cpx="i|'+x.id+'">Quitar</button></li>').join('')+'</ul>'
+    :'<p class="estado">Marca abajo los gastos y los ingresos que se anulan.</p>';
+  if(selG.length&&selI.length){
+    s+='<p class="estado">'+(Math.abs(dif)<0.01?'Cuadran al céntimo: desaparecen los dos lados.':
+      (dif<0?'Te quedan <b class="num">'+eur(-dif)+'</b> de gasto tuyo, en «'+esc(selG.slice().sort((a,b)=>b.amt-a.amt)[0].label)+'».':
+        'Te quedan <b class="num">'+eur(dif)+'</b> de ingreso, como «'+esc(selI.slice().sort((a,b)=>b.amt-a.amt)[0].label)+'».'))+'</p>';
+    if(Math.abs(dif)>=0.01)s+='<label class="chk"><input type="checkbox" id="cp-resto"'+(F.resto?' checked':'')+'> Que esa diferencia siga contando (desmárcalo si es un redondeo)</label>';
   }
-  s+='<div class="acciones">'+(F.inc?'<button type="button" class="btn" id="rb-guardar">Guardar compensación</button>':'')+'<button type="button" class="btn sec" id="rb-cancelar">Cancelar</button></div></div>';
+  s+='<div class="rango">'+campo('Desde','<input type="date" id="cp-d" value="'+F.desde+'">')+campo('Hasta','<input type="date" id="cp-h" value="'+F.hasta+'">')+'</div>';
+  const bG='<h3 class="h3">Gastos</h3>'+inp('cp-qg',F.qg,{ph:'Buscar gasto: restaurante, tributo…',attr:' type="search"'})+lista(C.gas,'g',F.qg);
+  const bI='<h3 class="h3">Ingresos</h3>'+inp('cp-qi',F.qi,{ph:'Buscar ingreso: bizum, devolución…',attr:' type="search"'})+lista(C.ing,'i',F.qi);
+  // primero el lado que falta por rellenar
+  s+=(F.pre==='g'||(selG.length&&!selI.length))?bI+bG:bG+bI;
+  s+='<div class="acciones">'+(selG.length&&selI.length?'<button type="button" class="btn" id="cp-guardar">Guardar compensación</button>':'')+'<button type="button" class="btn sec" id="cp-cancelar">Cancelar</button></div></div>';
   return s;
 }
 function seccionReglas(){
@@ -16537,26 +16622,21 @@ function enlazarFlujo(){
   document.querySelectorAll('[data-recatig]').forEach(b=>b.onclick=()=>{const i=b.dataset.recatig;
     cambiar('anotado',()=>{E('_recatShowIgnored='+(FL.verIg?'true':'false')+'; _recatCache=recatGroups(); recatIgnore('+(+i)+')');});});
   // compensaciones
-  const rn=$('#rb-nueva'); if(rn)rn.onclick=()=>{FL.reemb={qi:'bizum',inc:null,sel:{},notas:{},qg:'',desde:'',hasta:''};pintar();};
-  const rc=$('#rb-cancelar'); if(rc)rc.onclick=()=>{FL.reemb=null;pintar();};
-  const rqi=$('#rb-qi'); if(rqi)rqi.oninput=()=>{FL.reemb.qi=rqi.value;clearTimeout(rqi._t);rqi._t=setTimeout(()=>{pintar();const e=$('#rb-qi');if(e){e.focus();e.setSelectionRange(e.value.length,e.value.length);}},300);};
-  const ri=$('#rb-inc'); if(ri)ri.onchange=()=>{const F=FL.reemb;F.inc=ri.value||null;F.sel={};
-    const C=Q('rbcand',P=>P.reembCandidatos()), x=C.ing.find(y=>y.id===F.inc);
-    if(x){const dd=new Date(x.date+'T00:00:00'),a=new Date(dd),z=new Date(dd);a.setDate(a.getDate()-75);z.setDate(z.getDate()+20);F.desde=a.toISOString().slice(0,10);F.hasta=z.toISOString().slice(0,10);}
-    pintar();};
-  const rqg=$('#rb-qg'); if(rqg)rqg.oninput=()=>{FL.reemb.qg=rqg.value;clearTimeout(rqg._t);rqg._t=setTimeout(()=>{pintar();const e=$('#rb-qg');if(e){e.focus();e.setSelectionRange(e.value.length,e.value.length);}},300);};
-  const rd=$('#rb-d'),rh=$('#rb-h'); if(rd)rd.onchange=()=>{FL.reemb.desde=rd.value;pintar();}; if(rh)rh.onchange=()=>{FL.reemb.hasta=rh.value;pintar();};
-  document.querySelectorAll('[data-rbsel]').forEach(c=>c.onchange=()=>{const F=FL.reemb;if(c.checked)F.sel[c.dataset.rbsel]=true;else delete F.sel[c.dataset.rbsel];pintar();});
-  document.querySelectorAll('[data-rbnota]').forEach(c=>c.oninput=()=>{FL.reemb.notas[c.dataset.rbnota]=c.value;});
-  const rg=$('#rb-guardar'); if(rg)rg.onclick=()=>{const F=FL.reemb; const ids=Object.keys(F.sel);
-    if(!F.inc||!ids.length){aviso2('Marca al menos un gasto.',false);return;}
-    const form={incomeId:F.inc,sel:F.sel,notes:F.notas,incFilter:'',ftxt:'',ffrom:'',fto:''};
-    FL.reemb=null;
-    cambiar('compensación guardada',()=>{LEG.tmp=form;E('_reembForm=__LEG.tmp; reembSave()');});};
-  document.querySelectorAll('[data-rbundo]').forEach(b=>b.onclick=()=>{if(!confirm('El ingreso y sus gastos volverán a contar en ingresos, gastos y ahorro. ¿Deshacer la compensación?'))return;
+  const cn=$('#cp-nueva'); if(cn)cn.onclick=()=>abrirComp(null,null);
+  document.querySelectorAll('[data-cpabrir]').forEach(b=>b.onclick=()=>{const [t,id]=b.dataset.cpabrir.split('|');abrirComp(t,id);});
+  const cc=$('#cp-cancelar'); if(cc)cc.onclick=()=>{FL.comp=null;pintar();};
+  document.querySelectorAll('[data-cp]').forEach(c=>c.onchange=()=>{const [t,id]=c.dataset.cp.split('|');FL.comp[t][id]=true;pintar();});
+  document.querySelectorAll('[data-cpx]').forEach(b=>b.onclick=()=>{const [t,id]=b.dataset.cpx.split('|');delete FL.comp[t][id];pintar();});
+  const cr=$('#cp-resto'); if(cr)cr.onchange=()=>{FL.comp.resto=cr.checked;};
+  const cd=$('#cp-d'),ch=$('#cp-h'); if(cd)cd.onchange=()=>{FL.comp.desde=cd.value;pintar();}; if(ch)ch.onchange=()=>{FL.comp.hasta=ch.value;pintar();};
+  ['qg','qi'].forEach(k=>{const e=$('#cp-'+k); if(e)e.oninput=()=>{FL.comp[k]=e.value;clearTimeout(e._t);e._t=setTimeout(()=>{pintar();const e2=$('#cp-'+k);if(e2){e2.focus();e2.setSelectionRange(e2.value.length,e2.value.length);}},300);};});
+  const cg=$('#cp-guardar'); if(cg)cg.onclick=()=>{const F=FL.comp;
+    const o={gastos:Object.keys(F.g),ingresos:Object.keys(F.i),notas:F.notas,resto:!!F.resto};
+    FL.comp=null;
+    cambiar('compensación guardada',()=>{LEG.tmp=o;E('__LEG.P.compensar(__LEG.tmp)');});};
+  document.querySelectorAll('[data-rbundo]').forEach(b=>b.onclick=()=>{if(!confirm('Lo compensado volverá a contar en ingresos, gastos y ahorro, y se quita la diferencia que se apuntó aparte. ¿Deshacer la compensación?'))return;
     cambiar('compensación deshecha',()=>E('reembUndo('+jsq(b.dataset.rbundo)+')'));});
   // te lo deben
-  document.querySelectorAll('[data-dev-cobrado]').forEach(b=>b.onclick=()=>cambiar('marcado como cobrado',()=>E('pendDevCobrado('+jsq(b.dataset.devCobrado)+')')));
   document.querySelectorAll('[data-dev-quitar]').forEach(b=>b.onclick=()=>cambiar('vuelve a contar como gasto tuyo',()=>E('pendDevQuitar('+jsq(b.dataset.devQuitar)+')')));
   // reglas
   const ra=$('#rg-add'); if(ra)ra.onclick=()=>{const t=val('rg-t').trim(),c=val('rg-c');if(!t){aviso2('Escribe el texto que tiene que contener.',false);return;}
@@ -17257,8 +17337,17 @@ function extrasBuzon(){
   else if(q==='ingreso')s+='<div class="rango">'+fch('ma-f')+campo('Concepto',inp('ma-d','',{ph:'Bizum de…'}))+campo('Tipo',sel('ma-c',Object.entries(L.catsIng)))+imp('ma-i')+'</div>';
   else if(q==='gasto')s+='<div class="rango">'+fch('ma-f')+campo('Concepto',inp('ma-d','',{ph:'Reparación caldera'}))+campo('Categoría',sel('ma-c',[['__fijo','Gasto fijo (luz, agua, móvil…)']].concat(Object.entries(L.cats).sort((a,b)=>a[1].localeCompare(b[1],'es')))))+
     campo('Si es fijo, cuál',sel('ma-fijo',L.fijos.map(f=>[f.id,f.name])))+imp('ma-i')+'</div>';
-  else if(q==='fondo')s+='<div class="rango">'+campo('Fondo',sel('ma-ref',L.fondos.map(c=>[c.id,c.name])))+fch('ma-f')+imp('ma-i','Valor total, €')+
-    campo('O valor liquidativo',inp('ma-vl','',{ph:'€ por participación',attr:' inputmode="decimal"'}))+campo('Participaciones',inp('ma-p','',{attr:' inputmode="decimal"'}))+'</div><p class="pie">Pon el valor total, o el valor liquidativo y las participaciones.</p>';
+  else if(q==='fondo'){ const f=L.fondos.find(x=>x.id===MA.ref)||L.fondos[0]||{}; MA.ref=f.id;
+    const pa=f.sug>0?String(f.sug).replace('.',','):'';
+    const ayuda=!f.sug?'No sé cuántas tienes: ponlas esta vez y la próxima ya las recordaré.':
+      ('Las que tienes según la app'+(f.desde?(f.nAp?': las del '+fecha(f.desde)+' más las de '+f.nAp+' aportación(es) posteriores':', desde el '+fecha(f.desde)):'')+
+      '. Solo cámbialas si has comprado o vendido fuera de la app.'+(f.sinVL?' Ojo: después hiciste '+f.sinVL+' aportación(es) sin valor liquidativo; si compraste participaciones, súmalas.':''));
+    s+='<div class="rango">'+campo('Fondo',sel('ma-ref',L.fondos.map(c=>[c.id,c.name]),f.id))+fch('ma-f')+
+      campo('Valor liquidativo, € por participación',inp('ma-vl','',{ph:f.ultVL?'el último fue '+String(f.ultVL).replace('.',','):'',attr:' inputmode="decimal"'}))+
+      campo('Participaciones',inp('ma-p',pa,{attr:' inputmode="decimal"'}),ayuda)+'</div>'+
+      '<p class="estado" id="ma-total">Pon el valor liquidativo y calculo el valor de tu inversión.</p>'+
+      plegable('ma-fondo-total','O pon directamente el valor total',campo('Valor total, €',inp('ma-i','',{attr:' inputmode="decimal"'})));
+  }
   else if(q==='aport')s+='<div class="rango">'+campo('Fondo',sel('ma-ref',L.fondos.map(c=>[c.id,c.name])))+fch('ma-f')+imp('ma-i','Aportación, €')+
     campo('Valor liquidativo al comprar',inp('ma-vl','',{ph:'opcional',attr:' inputmode="decimal"'}))+'</div>';
   else if(q==='compra')s+='<div class="rango">'+campo('Empresa',inp('ma-n','',{ph:'o una que ya tienes',attr:' list="ma-stk"'})+'<datalist id="ma-stk">'+L.acciones.map(a=>'<option value="'+esc(a.name)+'">').join('')+'</datalist>')+fch('ma-f')+
@@ -17302,6 +17391,12 @@ function extrasBuzon(){
 function enlazarExtrasBuzon(){
   const q=$('#ma-que'); if(q)q.onchange=()=>{MA.que=q.value;pintar();const e=$('#ma-que');if(e)e.scrollIntoView({block:'start'});};
   const ok=$('#ma-ok'); if(ok)ok.onclick=apuntar;
+  if(MA.que==='fondo'){
+    const r=$('#ma-ref'); if(r)r.onchange=()=>{MA.ref=r.value;pintar();};
+    const tot=()=>{const vl=n_('ma-vl'),pa=n_('ma-p'),t=$('#ma-total'); if(!t)return;
+      t.innerHTML=(vl>0&&pa>0)?('Valor de tu inversión: <b class="num">'+eur(Math.round(vl*pa*100)/100)+'</b> ('+n2(vl)+' € por '+String(pa).replace('.',',')+' participaciones)'):'Pon el valor liquidativo y calculo el valor de tu inversión.';};
+    ['ma-vl','ma-p'].forEach(id=>{const e=document.getElementById(id); if(e)e.oninput=tot;}); tot();
+  }
   const cc=$('#rv-contra'); if(cc)cc.onclick=()=>cambiar('saldos contradictorios limpiados',()=>E('balLimpiarContradicciones()'));
   const du=$('#rv-dupes'); if(du)du.onclick=()=>cambiar('duplicados limpiados',()=>E('diagCleanDupes()'),{verAvisos:true});
   const df=$('#rv-desf'); if(df)df.onclick=()=>cambiar('meses guardados al día',()=>E('recPonerAlDia()'));
@@ -17342,8 +17437,9 @@ function apuntar(){
     const ocio=['restaurante','ropa','viaje','ocio'].includes(c);
     return cambiar('gasto apuntado',()=>{const p=ocio?'gocio':'gest';fijar(p+'-edit-id','');fijar(p+'-name',d);fijar(p+'-amt',i);fijar(p+'-cat',c);fijar(p+'-date',f);E(ocio?'addGastoOcio()':'addGastoEst()');});}
   if(q==='fondo'){ const vl=n_('ma-vl'), pa=n_('ma-p');
+    if(vl&&!pa)return falta('Faltan las participaciones: ponlas una vez y la app las recordará.');
     if(vl&&pa)return cambiar('valor de '+nom(L.fondos,ref)+' apuntado',()=>{fijar('bal-fund-date-'+ref,f);fijar('bal-fund-vl-'+ref,vl);fijar('bal-fund-parts-'+ref,pa);E('addFundByVL('+jsq(ref)+')');});
-    if(i==null)return falta('Pon el valor total, o el valor liquidativo y las participaciones.');
+    if(i==null)return falta('Pon el valor liquidativo.');
     return cambiar('valor de '+nom(L.fondos,ref)+' apuntado',()=>{fijar('bal-fund-date-'+ref,f);fijar('bal-fund-amt-'+ref,i);E('addBalance("fund",'+jsq(ref)+')');});}
   if(q==='aport'){ if(!i||i<=0)return falta('Pon la aportación.');
     return cambiar('aportación a '+nom(L.fondos,ref)+' apuntada',()=>{fijar('faport-amt-'+ref,i);fijar('faport-date-'+ref,f);fijar('faport-vl-'+ref,n_('ma-vl')||'');fijar('faport-edit-'+ref,'');E('addFundAport('+jsq(ref)+')');});}
