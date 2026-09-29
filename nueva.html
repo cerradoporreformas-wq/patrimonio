@@ -211,6 +211,7 @@ details.plegable>.dentro{padding:0 0 12px}
 .tabla small input.corto{width:64px;max-width:64px;margin-right:4px}
 .tabla td:first-child input.corto{text-align:left;width:150px;max-width:150px}
 .tabla td:first-child small input.corto{width:64px;max-width:64px;text-align:right}
+.movs li.comp .mv b s{color:var(--pizarra);font-weight:500}
 
 </style>
 </head>
@@ -14841,10 +14842,18 @@ __LEG.P={};
   // ── Movimientos, con todo lo que se puede hacer con cada uno ──
   P.movs=function(){
     const ci=compIncomeIds(), ce=compExpenseIds(), IC=P.catsIngreso();
+    // con qué está compensado cada apunte, para decirlo en la lista
+    const con={}, fd=d=>{const [y,m,dd]=String(d||'').split('-');return +dd+'/'+(+m)+'/'+String(y).slice(2);};
+    reembolsos.forEach(rb=>{
+      const I=((rb.incomeIds&&rb.incomeIds.length)?rb.incomeIds:[rb.incomeId]).map(i=>incomeLog.find(x=>x.id===i)).filter(Boolean);
+      const G=(rb.expenseIds||[]).map(e=>expenseLog.find(x=>x.id===e)).filter(Boolean);
+      const txt=L=>L.length===1?((L[0].desc||L[0].name||'')+' del '+fd(L[0].date)):(L.length+' apuntes');
+      I.forEach(x=>{con['i'+x.id]=txt(G);}); G.forEach(x=>{con['g'+x.id]=txt(I);});
+    });
     const I=incomeLog.map(x=>({t:'i',id:x.id,date:x.date,desc:x.desc||'',amt:Number(x.amt)||0,cat:x.cat,
-      label:IC[x.cat]||x.cat,comp:ci.has(x.id),nr:ingresoNoRecurrente(x),nd:!!x.nd,stock:x.stockId||null,sint:_esSintetico(x)}));
+      label:IC[x.cat]||x.cat,comp:ci.has(x.id),con:con['i'+x.id]||'',nr:ingresoNoRecurrente(x),nd:!!x.nd,stock:x.stockId||null,sint:_esSintetico(x)}));
     const G=expenseLog.map(x=>({t:'g',id:x.id,date:x.date,desc:x.name||'',amt:Number(x.amt)||0,cat:x.cat||'otro',
-      label:CAT_LABELS[x.cat]||x.cat||'Otro',kind:x.kind,comp:ce.has(x.id),nr:gastoNoRecurrente(x),dev:pendDev(x),sint:_esSintetico(x)}));
+      label:CAT_LABELS[x.cat]||x.cat||'Otro',kind:x.kind,comp:ce.has(x.id),con:con['g'+x.id]||'',nr:gastoNoRecurrente(x),dev:pendDev(x),sint:_esSintetico(x)}));
     return I.concat(G).filter(x=>!x.sint).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
   };
   // ── Sin clasificar (renderRecatPanel) ──
@@ -16405,6 +16414,10 @@ function pFlujo(){
   const mAct=F.meses.find(x=>x.ym===act);
   if(mAct&&h<act)s+='<p class="pie">'+MESES[+act.slice(5,7)-1].replace(/^./,c=>c.toUpperCase())+', de momento: han entrado <span class="num">'+eur(mAct.ing,0)+'</span> y han salido <span class="num">'+eur(mAct.gas,0)+'</span>.</p>';
   s+=barrasMes(Mp);
+  { const hastaD=finMes(+h.slice(0,4),+h.slice(5,7)), MV=(Q('movs',P=>P.movs())||[]).filter(x=>x.comp&&x.date>=d+'-01'&&x.date<=hastaD);
+    if(MV.length){ const ci=MV.filter(x=>x.t==='i').reduce((t,x)=>t+x.amt,0), cg=MV.filter(x=>x.t==='g').reduce((t,x)=>t+x.amt,0);
+      s+='<p class="pie">Ya descontadas las compensaciones: en este periodo no cuentan <span class="num">'+eur(ci,0)+'</span> de ingresos ni <span class="num">'+eur(cg,0)+'</span> de gastos, cada uno en su mes. '+
+        '<button type="button" class="enlace" data-ir="flujo" data-ancla="fl-comp">Ver cuáles</button></p>'; } }
   if(S&&S.yoy&&S.yoy.p!=null)s+='<p class="pie">'+nombreMesLargo(S.yoy.cur).replace(/^./,c=>c.toUpperCase())+' gastaste un <b class="num">'+pct(Math.abs(S.yoy.p),1)+'</b> '+(S.yoy.p<0?'menos':'más')+' que en '+nombreMesLargo(S.yoy.prev)+'.'+
     (S.y12&&S.y12.p!=null?' Los últimos 12 meses, un '+pct(Math.abs(S.y12.p),1)+(S.y12.p<0?' menos':' más')+' que los 12 anteriores.':' Los 12 meses contra los 12 anteriores saldrán cuando haya un año entero de movimientos importados por detrás (empiezan en '+nombreMesLargo(S.covStart)+').')+'</p>';
   const filasM=Mp.slice().reverse().map(x=>[mesCorto(x.ym)+(x.ym===act?' <small>a medias</small>':''),eur(x.ing,0),eur(x.gas,0),'<span class="'+cls(x.aho)+'">'+eurS(x.aho)+'</span>']);
@@ -16484,10 +16497,10 @@ function listaMovs(f,max){
   const IC=Q('catsIng',P=>P.catsIngreso());
   let s='<ul class="movs">'+L.map(x=>{
     const abierto=FL.abierto===x.t+x.id;
-    const marcas=[x.comp?'compensado':'',x.nr>0?'extraordinario '+eur(x.nr,0):'',x.dev>0?'te deben '+eur(x.dev,0):'',x.t==='i'&&x.cat==='dividendo'&&!x.stock?'sin acción':''].filter(Boolean);
+    const marcas=[x.comp?'compensado'+(x.con?' con '+x.con:'')+': no cuenta':'',x.nr>0?'extraordinario '+eur(x.nr,0):'',x.dev>0?'te deben '+eur(x.dev,0):'',x.t==='i'&&x.cat==='dividendo'&&!x.stock?'sin acción':''].filter(Boolean);
     let r='<li class="'+(abierto?'abierto':'')+(x.comp?' comp':'')+'"><button type="button" class="mv" data-mv="'+x.t+x.id+'" aria-expanded="'+abierto+'">'+
       '<span class="f num">'+fecha(x.date)+'</span><span class="d">'+esc(x.desc||'(sin concepto)')+'<small>'+esc(x.label)+(marcas.length?', '+marcas.join(', '):'')+'</small></span>'+
-      '<b class="num '+(x.t==='i'?'pos':'')+'">'+(x.t==='i'?'+':'')+eur(x.amt)+'</b></button>';
+      (x.comp?'<b class="num"><s>'+(x.t==='i'?'+':'')+eur(x.amt)+'</s></b>':'<b class="num '+(x.t==='i'?'pos':'')+'">'+(x.t==='i'?'+':'')+eur(x.amt)+'</b>')+'</button>';
     if(abierto){
       const k=x.t+x.id;
       r+='<div class="mv-acc">';
