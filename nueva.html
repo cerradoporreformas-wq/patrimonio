@@ -213,6 +213,17 @@ details.plegable>.dentro{padding:0 0 12px}
 .tabla td:first-child small input.corto{width:64px;max-width:64px;text-align:right}
 .movs li.comp .mv b s{color:var(--pizarra);font-weight:500}
 
+/* citas de la edición en blanco */
+.cita{margin:8px 0 22px;padding:16px 18px 14px 20px;border-left:3px solid var(--pluma);background:var(--suave);border-radius:0 var(--r2,12px) var(--r2,12px) 0}
+.cita blockquote{margin:0;font-family:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua","Noto Serif",Georgia,serif;font-style:italic;font-size:17.5px;line-height:1.5;color:var(--tinta);text-wrap:pretty;hyphens:manual}
+.cita blockquote::before{content:"\201C";color:var(--pluma);font-size:1.9em;line-height:0;vertical-align:-.36em;margin-right:3px;font-style:normal}
+.cita blockquote::after{content:"\201D";color:var(--pluma);font-style:normal}
+.cita figcaption{margin-top:10px;font-size:12.5px;color:var(--pizarra);letter-spacing:.02em;font-variant:small-caps}
+.cita figcaption::before{content:"\2014\00a0"}
+.cita cite{display:block;font-style:italic;font-variant:normal;letter-spacing:0;margin-top:1px;padding-left:1.2em}
+.cita.ligera{background:none;padding:2px 0 2px 16px;margin:6px 0 20px}
+.cita.ligera blockquote{font-size:18px}
+
 </style>
 </head>
 <body>
@@ -10770,7 +10781,7 @@ function xtbParse(buf){
 // Una misma compra puede venir partida en dos apuntes —los títulos enteros
 // por un lado y la fracción por otro—, así que se agrupan por número de
 // posición: 121 acciones + 0,6545 acciones son UNA compra de 121,6545.
-const XTB_OPRX=/(OPEN|CLOSE)\s+(BUY|SELL)\s+([\d.,]+)(?:\s*\/\s*([\d.,]+))?\s*@\s*([\d.,]+)/i;
+const XTB_OPRX=/(OPEN|CLOSE)\s+(BUY|SELL)\s+(?:[A-Za-z][A-Za-z0-9.\-]*\s+)?([\d.,]+)(?:\s*\/\s*([\d.,]+))?\s*@\s*([\d.,]+)/i;   // v165 · desde octubre de 2026 XTB mete el ticker: «OPEN BUY FMC.US 253/253.8851 @ 8.71»
 function xtbOperaciones(ops){
   const g={}, comis={};
   (ops||[]).forEach(o=>{
@@ -10914,10 +10925,32 @@ async function degiroStart(forzarElegir){
 function handleDegiroPortfolio(ev){
   const f=(ev.target.files||[])[0]; ev.target.value='';
   if(!f)return;
-  const r=new FileReader();
-  r.onload=e=>brokerFile(new Uint8Array(e.target.result),f.name,f.lastModified);
-  r.onerror=()=>toast('No se pudo abrir el archivo');
-  r.readAsArrayBuffer(f);
+  // v165 · XTB da un .zip con el Excel dentro. El lector de Excel lo abría en el
+  // ordenador pero no siempre en el iPad: ahora lo abre el propio navegador.
+  (async()=>{
+    let buf=new Uint8Array(await f.arrayBuffer());
+    try{ const dentro=await zipNativo(buf); if(dentro)buf=dentro; }catch(e){}
+    brokerFile(buf,f.name,f.lastModified);
+  })().catch(()=>toast('No se pudo abrir el archivo'));
+}
+async function zipNativo(buf){
+  if(!(buf[0]===0x50&&buf[1]===0x4B))return null;
+  let eocd=-1;
+  for(let i=buf.length-22;i>=Math.max(0,buf.length-65557);i--){ if(buf[i]===0x50&&buf[i+1]===0x4B&&buf[i+2]===0x05&&buf[i+3]===0x06){eocd=i;break;} }
+  if(eocd<0)return null;
+  const dv=new DataView(buf.buffer,buf.byteOffset,buf.byteLength), td=new TextDecoder();
+  const n=dv.getUint16(eocd+10,true); let p=dv.getUint32(eocd+16,true); const ent=[];
+  for(let k=0;k<n;k++){ if(dv.getUint32(p,true)!==0x02014b50)break;
+    const nl=dv.getUint16(p+28,true), xl=dv.getUint16(p+30,true), cl=dv.getUint16(p+32,true);
+    ent.push({nombre:td.decode(buf.subarray(p+46,p+46+nl)),metodo:dv.getUint16(p+10,true),csz:dv.getUint32(p+20,true),loff:dv.getUint32(p+42,true)});
+    p+=46+nl+xl+cl; }
+  if(ent.some(e=>e.nombre==='[Content_Types].xml'))return null;
+  const e=ent.find(x=>/\.(xlsx|xlsm|xls|csv)$/i.test(x.nombre)&&!/^__MACOSX\//.test(x.nombre)); if(!e)return null;
+  const ini=e.loff+30+dv.getUint16(e.loff+26,true)+dv.getUint16(e.loff+28,true), datos=buf.subarray(ini,ini+e.csz);
+  if(e.metodo===0)return datos.slice();
+  if(e.metodo===8&&typeof DecompressionStream==='function')
+    return new Uint8Array(await new Response(new Blob([datos]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer());
+  return null;
 }
 // v142 · El bróker se reconoce por los primeros bytes, no por la extensión:
 // un .xlsx y el .zip de XTB empiezan igual ("PK"), y el CSV de DEGIRO es
@@ -15111,6 +15144,12 @@ __LEG.P.accionesLista=function(){ return (cfg.stocks||[]).map(s=>({id:s.id,name:
       clasif:C?{anio:C.anio,obj:C.obj,rem:C.rem,total:C.total,pagos:C.pagos.map(x=>({k:x.k,ym:x.ym,importe:x.importe,tipo:x.tipo,origen:x.origen}))}:null};
   };
   // Comparativa de puestos (renderPuestos + renderPuestosTabla + _puestosExtra)
+  // añadir y quitar puestos de la tabla (la app de siempre no tenía cómo)
+  P.puestoAdd=function(){ const c=puestosCfg(), id='p'+Date.now().toString(36);
+    c.lista.push({id,nombre:'Puesto nuevo',grupo:'C1',nivel:18,ce:0}); save(); return id; };
+  P.puestoQuitar=function(id){ const c=puestosCfg();
+    if(c.lista.length<=1)throw new Error('Tiene que quedar al menos un puesto.');
+    c.lista=c.lista.filter(p=>p.id!==id); save(); };
   P.puestos=function(){
     const c=puestosCfg(), pc=pensionCfg();
     const A=c.lista.map(perfilCompanero), Y=c.lista.map(perfilYo);
@@ -15144,7 +15183,7 @@ __LEG.P.accionesLista=function(){ return (cfg.stocks||[]).map(s=>({id:s.id,name:
     const R=fiscalRenta(anio); if(!R)return null;
     const c=fiscalCfg();
     return {...R,G:{gan:R.G.gan,per:R.G.per,neto:R.G.neto,n:R.G.n},T:{...R.T},
-      ajustes:{retIPT:c.retIPT,retCap:c.retCap,deducAut:c.deducAut,irregular:c.irregular!==false}};
+      ajustes:{/*IPT*/iptRetPct:c.iptRetPct,/*/IPT*/capRetPct:c.capRetPct,deducAuton:c.deducAuton,irregular:c.irregular!==false}};
   };
   P.plazos=function(){
     const cal=calendarioFiscal().filter(x=>x.tipo!=='recibo');
@@ -15179,7 +15218,7 @@ __LEG.P.accionesLista=function(){ return (cfg.stocks||[]).map(s=>({id:s.id,name:
 
 // ── FUTURO ───────────────────────────────────────────────────────────
 (function(P){
-  P.pension=function(){
+/*CP*/  P.pension=function(){
     const c=pensionCfg(), T=jubTabla(); if(!T)return null;
     const F=T.F, hoy=todayISO();
     const mini=e=>e?{fecha:e.fecha,edad:e.edad,anios:e.K.aniosTotal,aniosT2:e.K.aniosT2,dosCuerpos:e.K.hayDosCuerpos,C1:e.K.C1,demora:e.D.puntos,
@@ -15201,7 +15240,7 @@ __LEG.P.accionesLista=function(){ return (cfg.stocks||[]).map(s=>({id:s.id,name:
       tope:{anual:CP_MAX_2026_ANIO,peor:peor?peor.totalAnual:0},
       gastoMes:S&&S.n?S.gasOrd/S.n:null,grupos:CP_GRUPOS,ccaas:Object.keys(IRPF_AUTON),reval};
   };
-  // La única proyección: de hoy a la jubilación elegida, con tu aportación
+/*/CP*/  // La única proyección: de hoy a la jubilación elegida, con tu aportación
   // mensual y la liquidez al 2 % (project, aportacionProyeccion y jubPlan, las
   // mismas piezas que usaban las dos proyecciones de la app de siempre).
   P.proyeccion=function(){
@@ -15224,7 +15263,7 @@ __LEG.P.accionesLista=function(){ return (cfg.stocks||[]).map(s=>({id:s.id,name:
 (function(P){
   P.vivienda=function(){
     const b=bienesCfg(), c=b.calc, pc=pensionCfg();
-    const edadYo=_edad(pc.nacimientoFecha)||48, bn=bienesNetos();
+    const edadReal=_edad(pc.nacimientoFecha), edadYo=edadReal||40, bn=bienesNetos();
     const ingYo=ingresoEstable(!!c.conProd), otras=(Number(c.otrasCuotas)||0), liq=liquidezHoy();
     const ventaNeta=c.vender?netoVentaActual():0;
     const ahorroYo=(c.ahorroEntrada!=null?Number(c.ahorroEntrada):liq);
@@ -15243,7 +15282,7 @@ __LEG.P.accionesLista=function(){ return (cfg.stocks||[]).map(s=>({id:s.id,name:
     const sinCoche=capacidadCompra({ingreso:ingYo,otrasCuotas:otras,edadMayor:edadYo,entrada:ahorroYo+ventaNeta});
     const conCoche=capacidadCompra({ingreso:ingYo,otrasCuotas:otras+S.cuota,edadMayor:edadYo,entrada:ahorroYo+ventaNeta-(S.desembolso||0)});
     const lim=r=>r?{...r,imp:{pct:r.imp.pct,txt:r.imp.txt}}:null;
-    return {b:JSON.parse(JSON.stringify(b)),bn,edadYo,ingYo,liq,ventaNeta,ahorroYo,solo:lim(solo),par:lim(par),
+    return {b:JSON.parse(JSON.stringify(b)),bn,edadYo,edadSupuesta:!edadReal,ingYo,liq,ventaNeta,ahorroYo,solo:lim(solo),par:lim(par),
       gastos:{filas:filasG,extras,mantPct,mant,tot,cuotaRef,mensual,pctIng:mensual/ingRef,precioRef,enPareja:!!par},
       coche:{S,costeReal,sinCoche:sinCoche.precio,conCoche:conCoche.precio}};
   };
@@ -15691,7 +15730,7 @@ function hoy(){
     ['acciones','Acciones','--acc',P.acciones,P.detalle.acciones],
     ['broker','Efectivo en brókers','--brk',P.broker,P.detalle.brokers]];
   const total=bloques.reduce((s,b)=>s+Math.max(0,b[3]),0)||1;
-  let h='<p class="tienes">Tienes</p>'+
+  let h=(EN_BLANCO?cita('Capitalismo, ahorro y trabajo duro, no hay otra cosa','M. A. Bastos Boubeta','','ligera'):'')+'<p class="tienes">Tienes</p>'+
     '<div class="cifra num">'+ent+'<small>,'+dec+' €</small></div>'+
     '<div class="linea-res">'+
       (dif!=null?('<span class="num '+(dif>=0?'pos':'neg')+'">'+(dif>=0?'+':'')+eur(dif,0)+'</span> desde el final de '+mesLargo(prev.ym)):'')+
@@ -15798,6 +15837,7 @@ function traerDe(old,origen){
 let COLA=[], OCUPADO=false;
 function buzon(){
   let h='<h1 style="font-size:24px;margin-top:10px">Buzón</h1>'+
+    (EN_BLANCO?cita('The curious task of economics is to demonstrate to men how little they really know about what they imagine they can design.','F. A. Hayek','The Fatal Conceit: The Errors of Socialism'):'')+
     '<p class="pie" style="font-size:15px">Echa aquí lo que te descargues: extractos de Bankinter y Trade Republic, '+
     'las carteras de DEGIRO y XTB, las operaciones de DEGIRO y tus nóminas. No hace falta decir qué es cada cosa: lo reconoce por dentro. '+
     'Antes de tocar nada te enseña qué va a cambiar, y lo que apliques queda también en la app de siempre.</p>';
@@ -15931,7 +15971,7 @@ function cuerpo(it){
 function nombreCat(c){
   const B={alimentacion:'alimentación',hogar:'hogar',luz:'luz',agua:'agua',suministros:'suministros',suscripciones:'suscripciones',
     estanco:'estanco',vehiculo:'vehículo',salud:'salud',restaurante:'restaurante',ropa:'ropa',viaje:'viaje',ocio:'ocio',otro:'otro',
-    nomina:'nómina',ipt:'IPT',dividendo:'dividendo',rend:'rendimientos',otro2:'otro'};
+    nomina:'nómina',/*IPT*/ipt:'IPT',/*/IPT*/prestacion:'pensión o prestación',dividendo:'dividendo',rend:'rendimientos',otro2:'otro'};
   const cc=(DB&&DB.reglas&&DB.reglas.customCats)||{};
   return B[c]||cc[c]||c;
 }
@@ -16029,6 +16069,12 @@ function arrancar(){
 }
 document.addEventListener('DOMContentLoaded',arrancar);
 
+
+// Una cita al principio de una pantalla
+function cita(texto,autor,obra,clase){
+  return '<figure class="cita'+(clase?' '+clase:'')+'"><blockquote lang="'+(/[a-z] the |economics/i.test(texto)?'en':'es')+'">'+esc(texto)+'</blockquote>'+
+    '<figcaption>'+esc(autor)+(obra?'<cite>'+esc(obra)+'</cite>':'')+'</figcaption></figure>';
+}
 
 // ════════════════════════════════════════════════════════════════════
 // v2 · BUZÓN
@@ -16288,7 +16334,14 @@ function describir(it){
 // ellas lo hace también el motor de siempre, con sus propias funciones, en la
 // app de siempre y con copia para deshacer, igual que el buzón.
 'use strict';
+const EN_BLANCO=false;   // la edición en blanco la monta build_blanco.py con true
 let MEMO=new Map();
+/*IPT*/function hayIPT(){ if(EN_BLANCO)return false; try{ puente(); return Number(E('pensionCfg().iptMes'))>0; }catch(e){ return false; } }/*/IPT*/
+function situacion(){ return EN_BLANCO?Q('situacion',P=>P.situacion()):null; }
+function rentaOK(){ if(!EN_BLANCO)return true; const S=situacion(); return !!(S&&S.ok); }
+function esAGE(){ if(!EN_BLANCO)return true; const S=situacion(); return !!(S&&S.funcionarioAGE); }
+const APP_EXTERNA='Para este cálculo utilice una app externa.';
+function hayDisc(){ try{ puente(); return Number(E('pensionCfg().discapacidad'))>0; }catch(e){ return false; } }
 function olvidar(){ MEMO=new Map(); }
 function puente(){
   legado();
@@ -16311,9 +16364,15 @@ function Q(clave,fn){
   MEMO.set(clave,r); return r;
 }
 // El motor viejo se recarga (tras importar o deshacer): lo calculado ya no vale
+// Si todavía no hay nada guardado (un aparato nuevo), load() no tiene qué leer
+// y se quedaba con lo de la simulación: el motor se crea de nuevo, vacío.
 (function(){
   const orig=recargarLegado;
-  recargarLegado=function(){ orig(); LEG.listo=false; olvidar(); };
+  recargarLegado=function(){
+    if(!localStorage.getItem('dlv_cfg')){ LEG.fn=null; LEG.P=null; LEG.modo='real'; LEG.scratch={}; legado(); }
+    else orig();
+    LEG.listo=false; olvidar();
+  };
 })();
 
 // ─── Cambiar algo, con el motor de siempre y con copia para deshacer ──
@@ -16474,7 +16533,7 @@ function pFlujo(){
     fila('Entró',eur(R.ingOrd,0),'de media, <span class="num">'+eur(F.medOrd.ing,0)+'</span> al mes')+
     fila('Salió',eur(R.gasOrd,0),'de media, <span class="num">'+eur(F.medOrd.gas,0)+'</span> al mes')+
     fila('Te sobró al mes',eur(F.medOrd.aho,0),doce&&T&&T.A?('un mes típico, <span class="num">'+eur(T.A.mediana,0)+'</span>'):'de media')+
-    (doce&&T&&T.T?fila('Libre de verdad',eur(T.T.ahoRecNetoMes,0)+'/mes','el '+pct(T.T.tasaRecNeta,1)+' de lo que entra, ya apartado lo que irá a Hacienda: es lo que puedes gastar o invertir sin hacerte trampas'):'')+
+    (doce&&T&&T.T&&rentaOK()?fila('Libre de verdad',eur(T.T.ahoRecNetoMes,0)+'/mes','el '+pct(T.T.tasaRecNeta,1)+' de lo que entra, ya apartado lo que irá a Hacienda: es lo que puedes gastar o invertir sin hacerte trampas'):'')+
     fila('Desde que hay datos','ahorras el '+pct(F.hist.tasa),F.hist.n+' meses cerrados')+
     (S?fila('Tu liquidez aguanta',mesesTexto(S.colchon),'de gastos, contando lo que pagas de renta cada año'):'')+
   '</div>';
@@ -16967,13 +17026,13 @@ function pSueldo(){
   const ult=B&&B.A.length?B.A.find(x=>x.nominas>=12)||B.A[0]:null;
   if(ult){
     const [ent,dec]=eur(ult.total).replace(' €','').split(',');
-    const det=x=>eur(x.sueldo)+' de sueldo en '+x.nominas+' nóminas'+(x.ipt?' y '+eur(x.ipt)+' de IPT':'')+(x.extras?'; '+eur(x.extras)+' eran atrasos, que solo se cobran una vez':'');
+    const det=x=>eur(x.sueldo)+' de sueldo en '+x.nominas+' nóminas'+/*IPT*/(x.ipt?' y '+eur(x.ipt)+' de IPT':'')+/*/IPT*/''+(x.extras?'; '+eur(x.extras)+' eran atrasos, que solo se cobran una vez':'');
     s+='<p class="tienes">En '+ult.anio+' ganaste</p><div class="cifra num">'+ent+'<small>,'+dec+' €</small></div>'+
       '<div class="linea-res">brutos: <span class="num">'+det(ult)+'</span>. Es la cifra que sale en la renta.</div>';
     const otros=B.A.filter(x=>x!==ult);
     if(otros.length)s+='<div class="filas">'+otros.map(x=>fila(x.anio+(x.nominas<12?', hasta ahora':''),eur(x.total),'<span class="num">'+det(x)+'</span>')).join('')+'</div>';
-    if(B.teor!=null){ const dif=ult.total-(B.teor+B.iptAnio);
-      s+='<p class="pie">Frente a lo que da tu puesto en un año normal con la IPT de hoy, en '+ult.anio+' cobraste <span class="num '+cls(dif)+'">'+eurS(dif,2)+'</span>: los atrasos no se repiten y la IPT se revaloriza cada año. Para comparar puestos, la tabla de más abajo; para Hacienda, la cifra de arriba.</p>'; }
+    if(B.teor!=null){ const dif=ult.total-(B.teor/*IPT*/+B.iptAnio/*/IPT*/);
+      s+='<p class="pie">Frente a lo que da tu puesto en un año normal'+/*IPT*/(hayIPT()?' con la IPT de hoy':'')+/*/IPT*/', en '+ult.anio+' cobraste <span class="num '+cls(dif)+'">'+eurS(dif,2)+'</span>: los atrasos no se repiten'+/*IPT*/(hayIPT()?' y la IPT se revaloriza cada año':'')+/*/IPT*/'. Para comparar puestos, la tabla de más abajo; para Hacienda, la cifra de arriba.</p>'; }
   }
   // ── Nóminas ──
   const N=Q('nominas',P=>P.nominas())||[];
@@ -16989,7 +17048,7 @@ function pSueldo(){
     if(N.length>14&&!SU.todas)s+='<div class="acciones"><button type="button" class="btn sec" id="su-todas">Ver las '+N.length+'</button></div>';
   }
   // ── Productividad ──
-  if(PR){
+  if(PR&&PR.total>0&&esAGE()){
     s+='<h2>Lo que no está asegurado</h2><p class="pie">Productividad y remanente van dentro de tu sueldo, pero no son derecho consolidado: se pueden dejar de pagar sin que cambie tu puesto.</p>';
     s+='<div class="filas">'+fila('Productividad fija',eur(PR.fija),'<span class="num">'+eur(PR.prodMes)+'</span> a cuenta cada mes, '+pct(PR.fija/PR.brutoAnual,1)+' del bruto')+
       fila('Por objetivos',eur(PR.objetivos),'pagos grandes, oscilan, '+pct(PR.objetivos/PR.brutoAnual,1)+' del bruto')+
@@ -17005,39 +17064,46 @@ function pSueldo(){
       '<button type="button" class="enlace" id="su-prodreal">Usar lo cobrado</button></div>';
   }
   // ── Puestos ──
-  if(PU){
-    const cur=PU.lista[PU.cur], an=SU.per==='anio', d=v=>an?v:v/12, V=r=>PU.verNeto?r.neto:r.bruto;
-    s+='<h2 id="su-puestos">Qué te dejaría cada puesto</h2>'+chips('super',[['mes','Al mes'],['anio','Al año']],SU.per)+chips('suneto',[['1','Neto'],['0','Bruto']],PU.verNeto?'1':'0');
-    s+='<p class="pie">Tú, con tu IPT y tu discapacidad, frente a un compañero soltero, sin hijos y sin discapacidad en el mismo puesto.'+
+  if(PU&&esAGE()){
+    const RENTA=rentaOK();
+    const cur=PU.lista[PU.cur], an=SU.per==='anio', d=v=>an?v:v/12, V=r=>(PU.verNeto&&RENTA)?r.neto:r.bruto;
+    /*IPT*/const IPT=hayIPT();/*/IPT*/const DISC=hayDisc(), comparar=RENTA&&(DISC/*IPT*/||IPT/*/IPT*/);   // sin IPT ni discapacidad, él y tú sois iguales
+    s+='<h2 id="su-puestos">Qué te dejaría cada puesto</h2>'+chips('super',[['mes','Al mes'],['anio','Al año']],SU.per)+(RENTA?chips('suneto',[['1','Neto'],['0','Bruto']],PU.verNeto?'1':'0'):'<p class="pie">En bruto: el neto depende de tu renta. '+APP_EXTERNA+'</p>');
+    s+='<p class="pie">'+(comparar?'Tú, con tu '+(/*IPT*/IPT&&DISC?'IPT y tu discapacidad':(IPT?'IPT':/*/IPT*/'discapacidad'/*IPT*/)/*/IPT*/)+', frente a un compañero soltero, sin hijos y sin discapacidad en el mismo puesto.':(RENTA?'Soltero y sin hijos, con las tablas de este año.':'Con las tablas de este año.'))+
       (PU.mejor.dif>0?' El que más te dejaría es '+esc(PU.mejor.nombre)+': <b class="num">+'+eur(d(PU.mejor.dif),0)+'</b> '+(an?'al año':'al mes')+'.':'')+'</p>';
-    s+=tabla(['Puesto','Él','Tú'],PU.lista.map(p=>{const r=[esc(p.nombre)+(p.propio?' <small>el tuyo, de tu nómina</small>':(p.sentencia?' <small>el de la sentencia</small>':''))+
-        '<small>'+p.grupo+', nivel '+p.nivel+', específico <span class="num">'+eur(p.ce)+'</span></small>',eur(d(V(p.comp)),0),'<b>'+eur(d(V(p.yo)),0)+'</b><small>+'+eur(d(V(p.yo)-V(p.comp)),0)+'</small>'];
+    s+=tabla(comparar?['Puesto','Él','Tú']:['Puesto','Te deja'],PU.lista.map(p=>{const nom=esc(p.nombre)+(p.propio?' <small>el tuyo, de tu nómina</small>':(p.sentencia?' <small>el de la sentencia</small>':''))+
+        '<small>'+p.grupo+', nivel '+p.nivel+', específico <span class="num">'+eur(p.ce)+'</span></small>';
+      const r=comparar?[nom,eur(d(V(p.comp)),0),'<b>'+eur(d(V(p.yo)),0)+'</b><small>+'+eur(d(V(p.yo)-V(p.comp)),0)+'</small>']:[nom,'<b>'+eur(d(V(p.yo)),0)+'</b>'];
       if(p.propio)r.attr=' class="destaca"'; return r;}),{});
     s+='<div class="rango">'+campo('Tu puesto actual',sel('su-actual',PU.lista.map(p=>[p.id,p.nombre]),cur.id))+'</div>';
     // euro a euro
     const a=cur.comp, y=cur.yo;
+    if(comparar){
     s+='<h2>Tu puesto, euro a euro</h2>';
     const cuenta=tabla(['Al año','Él','Tú'],[
       ['Sueldo bruto',eur(a.brutoSueldo),eur(y.brutoSueldo)],
-      ['Tu IPT<small>tributa, no está exenta</small>','—',eur(y.ipt)],
+      /*IPT*/...(IPT?[['Tu IPT<small>tributa, no está exenta</small>','—',eur(y.ipt)]]:[]),/*/IPT*/
       ['Derechos pasivos y MUFACE','−'+eur(a.cotiz),'−'+eur(y.cotiz)],
       ['Otros gastos','−'+eur(a.gastos-a.gastosDisc),'−'+eur(y.gastos-y.gastosDisc)],
-      ['Gastos por discapacidad<small>solo trabajando</small>','—',y.gastosDisc?'−'+eur(y.gastosDisc):'—'],
+      ...(DISC?[['Gastos por discapacidad<small>solo trabajando</small>','—',y.gastosDisc?'−'+eur(y.gastosDisc):'—']]:[]),
       ['Base liquidable',eur(a.baseLiq),eur(y.baseLiq)],
       ['Mínimo exento',eur(a.minimo),eur(y.minimo)],
       ['IRPF del año<small>tipo medio</small>','−'+eur(a.irpf)+'<small>'+pct(a.tipo,1)+'</small>','−'+eur(y.irpf)+'<small>'+pct(y.tipo,1)+'</small>'],
       Object.assign(['Te queda al año',eur(a.neto),eur(y.neto)],{attr:' class="suma"'})]);
-    s+='<p class="pie">Cobras <b class="num">'+eur(y.neto-a.neto)+'</b> más al año que él: <span class="num">'+eur(PU.porIpt)+'</span> por la IPT (Hacienda se lleva <span class="num">'+eur(y.ipt-PU.porIpt)+'</span> de ella, el '+pct((y.ipt-PU.porIpt)/y.ipt,1)+
-      ') y <span class="num">'+eur(PU.porFiscal)+'</span> porque tu discapacidad te baja el impuesto. Al jubilarte pierdes los gastos por discapacidad, pero el mínimo exento se queda.</p>'+plegable('su-cuenta','La cuenta completa, él y tú',cuenta);
-    if(PU.ret)s+='<div class="bloque suave"><p class="estado">En tus últimas '+PU.ret.n+' nóminas te han retenido <b class="num">'+eur(PU.ret.retenido)+'</b>, pero con la IPT el impuesto de verdad del año es otro. '+
-      (PU.ret.falta>0?'Faltan <b class="num">'+eur(PU.ret.falta)+'</b> que acabas pagando en junio: tu pagador retiene como si la IPT no existiera. Puedes pedir en tu habilitación que te suban el tipo.':'Te sobran <b class="num">'+eur(-PU.ret.falta)+'</b>: te saldrá a devolver.')+'</p></div>';
+    s+='<p class="pie">Cobras <b class="num">'+eur(y.neto-a.neto)+'</b> más al año que él'+
+      (/*IPT*/IPT?': <span class="num">'+eur(PU.porIpt)+'</span> por la IPT (Hacienda se lleva <span class="num">'+eur(y.ipt-PU.porIpt)+'</span> de ella, el '+pct((y.ipt-PU.porIpt)/y.ipt,1)+')'+(DISC?' y <span class="num">'+eur(PU.porFiscal)+'</span> porque tu discapacidad te baja el impuesto':''):/*/IPT*/
+        ' porque tu discapacidad te baja el impuesto')+'.'+(DISC?' Al jubilarte pierdes los gastos por discapacidad, pero el mínimo exento se queda.':'')+'</p>'+plegable('su-cuenta','La cuenta completa, él y tú',cuenta);
+    }
+    if(PU.ret&&RENTA)s+='<div class="bloque suave"><p class="estado">En tus últimas '+PU.ret.n+' nóminas te han retenido <b class="num">'+eur(PU.ret.retenido)+'</b>'+/*IPT*/(IPT?', pero con la IPT el impuesto de verdad del año es otro':'')+/*/IPT*/'. '+
+      (PU.ret.falta>0?'Faltan <b class="num">'+eur(PU.ret.falta)+'</b> que acabas pagando en junio: '+(/*IPT*/IPT?'tu pagador retiene como si la IPT no existiera':/*/IPT*/'te retienen de menos')+'. Puedes pedir en tu habilitación que te suban el tipo.':'Te sobran <b class="num">'+eur(-PU.ret.falta)+'</b>: te saldrá a devolver.')+'</p></div>';
     if(PU.niv)s+='<p class="pie">Si te reconocieran el nivel '+PU.niv.nivel+', el complemento de destino pasaría de <span class="num">'+eur(PU.niv.cdAntes)+'</span> a <span class="num">'+eur(PU.niv.cdDespues)+'</span> al mes: <span class="num">'+eur(PU.niv.bruto)+'</span> brutos al año que se quedan en <b class="num">'+eur(PU.niv.neto)+'</b> netos. Tu pensión no cambia: sale de tu subgrupo, no del nivel.</p>';
     // tablas
     const Cm=PU.comunes;
     s+='<h2 id="su-tablas">Tablas de puestos</h2>'+plegable('su-tab','Cambiar puestos y datos comunes',
       PU.lista.map(p=>'<div class="bloque"><div class="rango">'+campo('Nombre',inp('pn-'+p.id,p.nombre))+campo('Grupo',sel('pg-'+p.id,PU.grupos,p.grupo))+
         campo('Nivel',inp('pv-'+p.id,p.nivel,{t:'number'}))+campo('Específico al mes',inp('pc-'+p.id,String(p.ce).replace('.',','),{attr:' inputmode="decimal"'}))+'</div>'+
-        '<div class="acciones"><button type="button" class="btn sec" data-pguardar="'+p.id+'">Guardar</button></div></div>').join('')+
+        '<div class="acciones"><button type="button" class="btn sec" data-pguardar="'+p.id+'">Guardar</button>'+(PU.lista.length>1?'<button type="button" class="btn peligro" data-pquitar="'+p.id+'">Quitar</button>':'')+'</div></div>').join('')+
+      '<div class="acciones"><button type="button" class="btn sec" id="p-add">Añadir un puesto</button></div>'+
       '<h3 class="h3">Comunes a todos los puestos</h3><div class="rango">'+
       campo('Trienios al mes',inp('pcm-trienios',String(Cm.trienios).replace('.',','),{attr:' inputmode="decimal"'}))+
       campo('Productividad al mes',inp('pcm-prodMes',String(Cm.prodMes).replace('.',','),{attr:' inputmode="decimal"'}))+
@@ -17060,6 +17126,9 @@ function enlazarSueldo(){
     cambiar('puesto guardado',()=>{E('setPuestoCampo('+jsq(id)+',"nombre",'+jsq(val('pn-'+id))+')');E('setPuestoCampo('+jsq(id)+',"grupo",'+jsq(val('pg-'+id))+')');
       E('setPuestoCampo('+jsq(id)+',"nivel",'+jsq(val('pv-'+id))+')');
       const ce=val('pc-'+id); if(ce.trim()!==''&&Math.abs((numIn('pc-'+id)||0)-(((Q('puestos',P=>P.puestos())||{lista:[]}).lista.find(p=>p.id===id)||{}).ce||0))>0.004)E('setPuestoCampo('+jsq(id)+',"ce",'+jsq(ce)+')');});});
+  document.querySelectorAll('[data-pquitar]').forEach(b=>b.onclick=()=>{if(!confirm('¿Quitar este puesto de la tabla?'))return;
+    cambiar('puesto quitado',()=>E('__LEG.P.puestoQuitar('+jsq(b.dataset.pquitar)+')'));});
+  const pa=$('#p-add'); if(pa)pa.onclick=()=>{PLEG['su-tab']=true; cambiar('puesto añadido',()=>E('__LEG.P.puestoAdd()'),{hecho:'Puesto añadido al final de la tabla: ponle nombre, grupo, nivel y específico.'});};
   const pg=$('#pcm-guardar'); if(pg)pg.onclick=()=>cambiar('datos comunes guardados',()=>{['trienios','prodMes','prodExtraAnio'].forEach(k=>E('setPuestoCfg('+jsq(k)+','+jsq(val('pcm-'+k))+')'));
     const f=numIn('pcm-factorCE'); if(f!=null)E('setPuestoCfg("factorCE",'+(f/100)+')');});
 }
@@ -17078,21 +17147,26 @@ function pImp(){
   const anio=new Date().getFullYear();
   const R=Q('renta|'+anio,P=>P.renta(anio)), PL=Q('plazos',P=>P.plazos()), PV=Q('plusv',P=>P.plusvalias()), CO=Q('cotejo',P=>P.cotejo())||[];
   let s=titulo('Impuestos');
+  const SIT=situacion(), RENTA=rentaOK();
+  if(SIT)s+=seccionSituacion(SIT);
   // ── La renta de este año ──
-  if(R){
+  if(!RENTA){
+    s+='<div class="bloque suave"><p class="estado"><b>'+APP_EXTERNA+'</b></p><p class="pie">La previsión de la renta solo se hace para la declaración individual de una persona soltera, sin hijos ni ascendientes a cargo, que vive en '+
+      SIT.conEscala.join(', ').replace(/, ([^,]*)$/,' o $1')+'. En tu caso, '+SIT.motivos.join(', ')+'.</p></div>';
+  } else if(R){
     const aPagar=R.resultado>=0;
     const [ent,dec]=eur(Math.abs(R.resultado)).replace(' €','').split(',');
     s+='<p class="tienes">La renta de '+anio+' te saldrá '+(aPagar?'a pagar':'a devolver')+'</p><div class="cifra num '+(aPagar?'neg':'pos')+'">'+ent+'<small>,'+dec+' €</small></div>'+
       '<div class="linea-res">se presenta hasta el '+fechaLarga(R.fechaPago)+(aPagar&&R.mesesHasta>0?'. Quedan '+R.mesesHasta+' meses: aparta <b class="num">'+eur(R.apartarMes)+'</b> al mes':'')+'</div>';
     s+='<div class="filas">'+
       (R.porVentas>0?fila('Por vender acciones',eur(R.porVentas),'nadie te retiene nada por ellas: el dinero ya lo cobraste entero'):'')+
-      (R.dosPagadores?fila('Dos pagadores','','la nómina retiene como si la IPT no existiera y la Seguridad Social, como si no existiera la nómina. Juntas caen en un tramo más alto, y esa diferencia aparece entera en junio.'):'')+
+      /*IPT*/(R.dosPagadores?fila('Dos pagadores','','la nómina retiene como si la IPT no existiera y la Seguridad Social, como si no existiera la nómina. Juntas caen en un tramo más alto, y esa diferencia aparece entera en junio.'):'')+/*/IPT*/
     '</div>';
     const T=R.T;
     const cuenta=tabla(['Concepto','Importe'],[
       ['Nóminas cobradas<small>'+T.meses+' meses registrados</small>',eur(T.real)],
       ['Nóminas que faltan<small>'+(T.detProy||[]).length+' meses estimados como el año pasado</small>',eur(T.proy)],
-      ['IPT<small>'+R.I.n+' pagas cobradas y el resto estimadas</small>',eur(R.I.total)],
+      /*IPT*/...(R.I.total>0?[['IPT<small>'+R.I.n+' pagas cobradas y el resto estimadas</small>',eur(R.I.total)]]:[]),/*/IPT*/
       ['Reducción del 30 %<small>atrasos de más de dos años, art. 18.2</small>','−'+eur(R.redIrreg)],
       ['Cotizaciones<small>MUFACE y derechos pasivos</small>','−'+eur(R.cotiz)],
       ['Otros gastos','−'+eur(R.gastos-R.gastoDisc)],
@@ -17106,22 +17180,25 @@ function pImp(){
       ['Deducciones autonómicas'+(R.deducAutHeredada?'<small>las de tu última declaración</small>':''),'−'+eur(R.deducAut)],
       Object.assign(['Cuota',eur(R.cuota)],{attr:' class="suma"'}),
       ['Retenido en la nómina<small>'+eur(T.retReal)+' ya retenidos y '+eur(T.retProy)+' que faltan, al '+String(T.pct).replace('.',',')+' %</small>','−'+eur(R.retTrab)],
-      ...(R.retIPT?[['Retenido en la IPT','−'+eur(R.retIPT)]]:[]),
+      /*IPT*/...(R.retIPT?[['Retenido en la IPT','−'+eur(R.retIPT)]]:[]),/*/IPT*/
       ['Retenido en los intereses','−'+eur(R.retCap)]]);
     s+=plegable('im-cuenta','La cuenta, pieza a pieza',cuenta+'<p class="pie">Con los datos de la app y las escalas de '+anio+'. No cuenta planes de pensiones ni cambios en tu familia: es para apartar dinero, no una declaración.</p>');
     const A=R.ajustes;
     s+=plegable('im-ajustes','Ajustar la previsión','<div class="rango">'+
-      campo('Retención de la IPT, %',inp('fz-retIPT',A.retIPT==null?'':String(A.retIPT).replace('.',','),{ph:'0',attr:' inputmode="decimal"'}))+
-      campo('Retención de intereses, %',inp('fz-retCap',A.retCap==null?'':String(A.retCap).replace('.',','),{ph:'19',attr:' inputmode="decimal"'}))+
-      campo('Deducciones autonómicas, €',inp('fz-deducAut',A.deducAut==null?'':String(A.deducAut).replace('.',','),{ph:'las del año pasado',attr:' inputmode="decimal"'}))+'</div>'+
-      '<label class="chk"><input type="checkbox" id="fz-irregular"'+(A.irregular?' checked':'')+'> Reducción del 30 % a los atrasos de la sentencia (hay que marcarla en la declaración)</label>'+
+      /*IPT*/(hayIPT()?campo('Retención de la IPT, %',inp('fz-iptRetPct',A.iptRetPct==null?'':String(A.iptRetPct).replace('.',','),{ph:'0',attr:' inputmode="decimal"'})):'')+/*/IPT*/
+      campo('Retención de intereses, %',inp('fz-capRetPct',A.capRetPct==null?'':String(A.capRetPct).replace('.',','),{ph:'19',attr:' inputmode="decimal"'}))+
+      campo('Deducciones autonómicas, €',inp('fz-deducAuton',A.deducAuton==null?'':String(A.deducAuton).replace('.',','),{ph:'las del año pasado',attr:' inputmode="decimal"'}))+'</div>'+
+      '<label class="chk"><input type="checkbox" id="fz-irregular"'+(A.irregular?' checked':'')+'> Reducción del 30 % a los atrasos de más de dos años (hay que marcarla en la declaración)</label>'+
       '<div class="acciones"><button type="button" class="btn sec" id="fz-guardar">Guardar</button></div>');
+    } else if(EN_BLANCO){
+    s+=vacio('Para prever la renta de '+anio+' hacen falta tus nóminas de este año: échalas al Buzón, en PDF.');
   }
   // ── Plazos ──
   s+='<h2>Plazos</h2>';
   if(PL){
     const hoy=HOY(), dias=f=>Math.round((Date.parse(f)-Date.parse(hoy))/864e5);
     const decl=R?('Declaración '+anio+' (calculada)'):'';
+    if(!RENTA)PL.cal=PL.cal.filter(x=>!/calculada/i.test(x.titulo));
     s+='<ul class="lista-simple">'+PL.cal.map(x=>'<li><span>'+esc(limpia(x.titulo))+'<small>'+fecha(x.fecha)+', en '+dias(x.fecha)+' días'+
         (x.titulo===decl?'; la de arriba':'')+(x.nota&&x.titulo!==decl?'. '+esc(limpia(x.nota)):'')+'</small></span>'+
         (x.imp!=null&&x.titulo!==decl?'<b class="num">'+eur(x.imp)+'</b>':'')+'</li>').join('')+'</ul>';
@@ -17137,9 +17214,9 @@ function pImp(){
     const bloque=(Y,txt)=>{ if(!Y.ops.length)return '';
       return '<div class="bloque"><h3>'+Y.year+'</h3><p class="pie">'+txt+'</p><div class="filas">'+
         fila('Ganancia neta','<span class="'+cls(Y.totalGain)+'">'+eurS(Y.totalGain,2)+'</span>',Y.ops.length+' ventas'+(Y.lossNeg<0?', con '+eur(-Y.lossNeg)+' de pérdidas que compensan':''))+
-        (txt.indexOf('arriba')<0?fila('IRPF',eur(Y.irpf),'al tipo del ahorro'):'')+'</div>'+
+        (txt.indexOf('arriba')<0&&RENTA?fila('IRPF',eur(Y.irpf),'al tipo del ahorro'):'')+'</div>'+
         plegable('pv-'+Y.year,'Ver las '+Y.ops.length+' ventas',tabla(['Venta','Resultado'],Y.ops.map(o=>[esc(o.name)+'<small>'+fecha(o.date)+', vendida por '+eur(o.venta,0)+', te costó '+eur(o.coste,0)+'</small>','<span class="'+cls(o.gl)+'">'+eurS(o.gl,2)+'</span>'])))+'</div>'; };
-    s+=bloque(PV.cur,'Van a la renta de '+PV.cur.year+': ya están dentro de la cifra de arriba.');
+    s+=bloque(PV.cur,'Van a la renta de '+PV.cur.year+(RENTA?': ya están dentro de la cifra de arriba.':'.'));
     s+=bloque(PV.prev,PV.decl&&PV.decl.nota?('Declaradas: '+esc(limpia(PV.decl.nota))+'.'):('Van a la renta de '+PV.prev.year+'.'));
     if(PV.latentes.length&&PV.cur.totalGain>0){
       s+='<p class="estado">Hasta el 31 de diciembre todavía se puede mover: vender con pérdidas compensa euro a euro las ganancias del año. Tienes <b class="num">'+eur(-PV.perdLat,0)+'</b> en pérdidas sin realizar, repartidas en '+PV.latentes.length+' acciones: las que van en rojo en <button type="button" class="enlace" data-ir="inv" data-ancla="iv-abiertas">Acciones que tienes</button>.</p>'+
@@ -17154,7 +17231,7 @@ function pImp(){
     s+='<div class="bloque"><h3>'+C.anio+'</h3><p class="pie">'+esc(limpia(C.nota))+'</p>'+
       (mal.length?('<p class="estado">'+(bien?bien+' casillas cuadran al céntimo. ':'')+'No cuadran:</p>'+tabla(['Casilla','Declarado','A la app'],mal.map(f=>[f.c+' '+esc(f.l),eur(f.decl),'<span class="neg">'+(f.dif>0?'le sobran ':'le faltan ')+eur(Math.abs(f.dif))+'</span>'])))
         :'<p class="estado">Todas las casillas que la app puede saber cuadran al céntimo.</p>')+
-      (C.motor!=null?'<p class="pie">Recalculada con tus casillas, la app da un resultado '+(Math.abs(C.motor-C.decl)<1?'igual al de Hacienda: la previsión de este año es de fiar.':('distinto al de Hacienda en <span class="num">'+eur(C.motor-C.decl)+'</span>.'))+'</p>':'')+
+      (C.motor!=null&&RENTA?'<p class="pie">Recalculada con tus casillas, la app da un resultado '+(Math.abs(C.motor-C.decl)<1?'igual al de Hacienda: la previsión de este año es de fiar.':('distinto al de Hacienda en <span class="num">'+eur(C.motor-C.decl)+'</span>.'))+'</p>':'')+
       plegable('co-'+C.anio,'Cambiar las casillas de '+C.anio,C.casillas.map(f=>campo(f.c+' '+esc(f.l),inp('dc-'+C.anio+'-'+f.k,f.v==null?'':String(f.v).replace('.',','),{attr:' inputmode="decimal"'}))).join('')+
         '<div class="acciones"><button type="button" class="btn sec" data-decl="'+C.anio+'">Guardar las casillas</button></div>')+'</div>';
   });
@@ -17162,7 +17239,8 @@ function pImp(){
   return s;
 }
 function enlazarImp(){
-  const g=$('#fz-guardar'); if(g)g.onclick=()=>cambiar('previsión ajustada',()=>{['retIPT','retCap','deducAut'].forEach(k=>E('setFiscal('+jsq(k)+','+jsq(val('fz-'+k).replace(',','.'))+')'));
+  if(EN_BLANCO)enlazarSituacion();
+  const g=$('#fz-guardar'); if(g)g.onclick=()=>cambiar('previsión ajustada',()=>{[/*IPT*/'iptRetPct',/*/IPT*/'capRetPct','deducAuton'].filter(k=>document.getElementById('fz-'+k)).forEach(k=>E('setFiscal('+jsq(k)+','+jsq(val('fz-'+k).replace(',','.'))+')'));
     E('setFiscal("irregular",'+($('#fz-irregular').checked)+')');});
   document.querySelectorAll('[data-fedit]').forEach(b=>b.onclick=()=>{const v=prompt('Importe previsto, en euros:');if(v==null)return;
     cambiar('importe previsto cambiado',()=>E('fiscalEdit('+jsq(b.dataset.fedit)+')'),{respuestas:[v]});});
@@ -17176,6 +17254,29 @@ function enlazarImp(){
     cambiar('declaración de '+a+' creada',()=>E('declAdd()'),{respuestas:[a]});};
 }
 PINTORES.imp=[pImp,enlazarImp];
+
+// Tu situación (solo en la edición en blanco): la renta la necesita
+function seccionSituacion(S){
+  const f='<div class="rango">'+
+    campo('Estado civil',sel('st-estado',[['soltero','Soltero o soltera'],['casado','Casado o casada'],['pareja','Pareja de hecho'],['viudo','Viudo o viuda'],['separado','Separado, separada o divorciado']],S.estado))+
+    campo('Declaración',sel('st-declaracion',[['individual','Individual'],['conjunta','Conjunta']],S.declaracion))+
+    campo('Hijos a cargo',inp('st-hijos',S.hijos,{t:'number'}))+
+    campo('Ascendientes a cargo',inp('st-ascendientes',S.ascendientes,{t:'number'}),'padres o abuelos que viven contigo')+
+    campo('Comunidad donde vives',sel('st-ccaa',[['','Elige tu comunidad']].concat(S.ccaas.map(c=>[c,c])),S.ccaa))+
+    campo('Discapacidad reconocida',sel('st-discapacidad',[['0','No'],['33','33 % o más'],['65','65 % o más']],String(S.discapacidad||0)))+'</div>'+
+    '<label class="chk"><input type="checkbox" id="st-age"'+(S.funcionarioAGE?' checked':'')+'> Soy funcionario o funcionaria de la Administración General del Estado (activa las tablas de puestos en Tu sueldo)</label>'+
+    '<div class="acciones"><button type="button" class="btn sec" id="st-guardar">Guardar</button></div>';
+  const resumen=S.ccaa?({soltero:'Soltero',casado:'Casado',pareja:'Pareja de hecho',viudo:'Viudo',separado:'Separado'}[S.estado]||'')+
+    (S.declaracion==='conjunta'?', conjunta':'')+(S.hijos?', '+S.hijos+' hijo'+(S.hijos>1?'s':''):'')+(S.ascendientes?', '+S.ascendientes+' ascendiente'+(S.ascendientes>1?'s':''):'')+', '+S.ccaa:'Falta tu comunidad';
+  return '<h2 id="im-situacion">Tu situación</h2>'+plegable('im-sit','Tu situación: '+resumen,f,!S.ccaa);
+}
+function enlazarSituacion(){
+  const g=$('#st-guardar'); if(!g)return;
+  g.onclick=()=>cambiar('situación guardada',()=>{
+    ['estado','declaracion','hijos','ascendientes','ccaa','discapacidad'].forEach(k=>E('setSituacion('+jsq(k)+','+jsq(val('st-'+k))+')'));
+    E('setSituacion("funcionarioAGE",'+$('#st-age').checked+')');
+  },{hecho:'Situación guardada.'});
+}
 
 
 // ════════════════════════════════════════════════════════════════════
@@ -17199,11 +17300,12 @@ function pFuturo(){
   s+=chips('jub',[['voluntaria','Voluntaria, '+fecha(F.fVoluntaria)],['forzosa','Forzosa, '+fecha(F.fForzosa)],['prorroga','Prórroga, '+fecha(F.fMax)]],esc_);
   s+='<p class="pie">La fecha que elijas es la que usa toda la app: la proyección de abajo y la de la vivienda.</p>';
   // ── Año a año ──
-  s+='<h2>Lo que cobrarías, año a año</h2><p class="pie">En euros de hoy. La pensión es la de Clases Pasivas; cada mes se suma la IPT, <span class="num">'+eur(PE.forz.iptMes,0)+'</span>'+(PE.cfg.ipt20?' con el +20 %':'')+'. Neto al mes, con el IRPF del año entero; debajo, bruto y retención.</p>';
+  /*IPT*/const IPT=hayIPT();/*/IPT*/const DISC=hayDisc();
+  s+='<h2>Lo que cobrarías, año a año</h2><p class="pie">En euros de hoy. La pensión es la de Clases Pasivas'+/*IPT*/(IPT?'; cada mes se suma la IPT, <span class="num">'+eur(PE.forz.iptMes,0)+'</span>'+(PE.cfg.ipt20?' con el +20 %':''):'')+/*/IPT*/'. Neto al mes, con el IRPF del año entero; debajo, bruto y retención.</p>';
   s+=tabla(['Año','Pensión','Neto al mes'],PE.filas.map(e=>{
     const marca=e.fecha===F.fVoluntaria||e.fecha===(F.fVoluntaria>F.fCarencia?F.fVoluntaria:F.fCarencia)?'voluntaria':(e.esForzosa?'forzosa':(e.necesitaPermiso?'prórroga':''));
     const r=[e.fecha.slice(0,4)+'<small>'+e.edad+' años, '+e.anios+' de servicio'+(marca?', '+marca:'')+'</small>',
-      eur(e.cpMes,0)+'<small>escala '+pct(e.C1,2)+(e.demora?'; demora +'+Math.round(e.demora*100):'')+(e.iptDudoso?'; el +20 % de la IPT, dudoso':'')+'</small>',
+      eur(e.cpMes,0)+'<small>escala '+pct(e.C1,2)+(e.demora?'; demora +'+Math.round(e.demora*100):'')+/*IPT*/(IPT&&e.iptDudoso?'; el +20 % de la IPT, dudoso':'')+/*/IPT*/'</small>',
       '<b>'+eur(e.netoMes,0)+'</b><small>bruto '+eur(e.totalMes,0)+', IRPF '+pct(e.tipo,1)+'</small>'];
     if(e.fecha===elegido.fecha)r.attr=' class="destaca"'; return r;}));
   const dif=PE.max.netoMes-PE.vol.netoMes;
@@ -17212,14 +17314,15 @@ function pFuturo(){
     (PE.gastoMes?'Jubilándote en la forzosa, las dos pensiones cubrirían el <b class="num">'+pct(PE.forz.netoMes/PE.gastoMes)+'</b> de lo que gastas hoy.':'')+'</p>';
   // ── Hoy ──
   s+='<div class="filas">'+fila('Si te jubilaras hoy',eur(PE.hoy.mes,0)+'/mes',PE.hoy.carencia?'de Clases Pasivas, por '+PE.cfg.cpPagas+' pagas: '+PE.hoy.anios+' años de servicio, escala '+pct(PE.hoy.C1,2):'todavía no llegas a los 15 años de carencia')+
-    fila('El +20 % de tu IPT','+'+eur(PE.ipt20.inc,2)+'/mes','del '+PE.cfg.iptPct+' % al '+(PE.cfg.iptPct+20)+' % de tu base, ya contado en la tabla de arriba'+(PE.cfg.ipt20?'':' (lo tienes desactivado en tus datos)')+'. Exige 55 años cumplidos (el '+fecha(PE.ipt20.f55)+') y no estar trabajando; pasados los 67 ('+fecha(PE.ipt20.f67)+') el INSS suele denegarlo. Se pide el mes en que dejas de trabajar.')+'</div>';
+    /*IPT*/(!IPT?'':fila('El +20 % de tu IPT','+'+eur(PE.ipt20.inc,2)+'/mes','del '+PE.cfg.iptPct+' % al '+(PE.cfg.iptPct+20)+' % de tu base, ya contado en la tabla de arriba'+(PE.cfg.ipt20?'':' (lo tienes desactivado en tus datos)')+'. Exige 55 años cumplidos (el '+fecha(PE.ipt20.f55)+') y no estar trabajando; pasados los 67 ('+fecha(PE.ipt20.f67)+') el INSS suele denegarlo. Se pide el mes en que dejas de trabajar.'))+/*/IPT*/'</div>';
   // Hacienda en el escenario elegido
   const I=elegido.irpf;
   s+=plegable('fu-irpf','Lo que se queda Hacienda al jubilarte',tabla(['En un año','Importe'],[
     ['Las dos pensiones',eur(I.bruto)],['Otros gastos','−'+eur(I.gastos)],Object.assign(['Base liquidable',eur(I.baseLiq)],{attr:' class="suma"'}),
     ['Mínimo personal<small>el autonómico, '+eur(I.minAut)+'</small>',eur(I.minEst)],['Cuota estatal',eur(I.cuotaEst)],['Cuota autonómica',eur(I.cuotaAut)],
     Object.assign(['IRPF del año',eur(elegido.irpfAnual)],{attr:' class="suma"'}),['Te queda',eur(elegido.netoAnual)]])+
-    '<p class="pie">Dos pagadores: Clases Pasivas y el INSS te retendrán cada uno como si el otro no existiera, y en junio tendrás que pagar la diferencia. Pierdes los gastos por discapacidad de trabajador activo, pero el mínimo por discapacidad se queda (TEAC, 19/7/2024).</p>');
+    ((DISC/*IPT*/||IPT/*/IPT*/)?'<p class="pie">'+/*IPT*/(IPT?'Dos pagadores: Clases Pasivas y el INSS te retendrán cada uno como si el otro no existiera, y en junio tendrás que pagar la diferencia. ':'')+/*/IPT*/
+      (DISC?'Pierdes los gastos por discapacidad de trabajador activo, pero el mínimo por discapacidad se queda (TEAC, 19/7/2024).':'')+'</p>':''));
   // ── La proyección ──
   if(PR){
     s+='<h2 id="fu-proy">Tu patrimonio hasta entonces</h2>';
@@ -17237,9 +17340,9 @@ function pFuturo(){
   if(AU&&AU.AU){
     const A=AU.AU;
     s+='<h2>Si dejaras de trabajar hoy</h2><div class="filas">'+
-      fila('Tu patrimonio te duraría',A.infinita?'para siempre':mesesTexto(A.meses),A.infinita?'la IPT cubre lo que gastas en vivir':'contando la IPT; sin ella, '+mesesTexto(AU.sinIpt))+
+      fila('Tu patrimonio te duraría',A.infinita?'para siempre':mesesTexto(A.meses),/*IPT*/IPT?(A.infinita?'la IPT cubre lo que gastas en vivir':'contando la IPT; sin ella, '+mesesTexto(AU.sinIpt)):/*/IPT*/'sin ningún otro ingreso')+
       (A.infinita?'':fila('Primero el efectivo',mesesTexto(A.mesesCash),'no tributa')+fila('Después, las inversiones',mesesTexto(A.mesesInv),'por cada euro que gastas hay que vender '+n2(A.factor)+' €: el '+pct(A.g)+' de su valor es plusvalía y tributa'))+'</div>'+
-      '<p class="pie">Cuenta solo el gasto de vivir, sin la renta, que ya no se repetiría (la de este año sí se paga), y la IPT neta de <span class="num">'+eur(AU.IPT.mes,0)+'</span> al mes. Supone que el patrimonio no renta nada: es un suelo, no una previsión.</p>';
+      '<p class="pie">Cuenta solo el gasto de vivir, sin la renta, que ya no se repetiría (la de este año sí se paga)'+/*IPT*/(IPT?', y la IPT neta de <span class="num">'+eur(AU.IPT.mes,0)+'</span> al mes':'')+/*/IPT*/'. Supone que el patrimonio no renta nada: es un suelo, no una previsión.</p>';
   }
   // ── Datos ──
   s+=datosPension(PE);
@@ -17252,26 +17355,28 @@ function datosPension(PE){
     campo('Entraste como',sel('pn-grupoIni',(PE?PE.grupos:['A1','A2','B','C1','C2','E']),c.grupoIni||'C2'))+
     campo('Grupo actual',sel('pn-grupo',(PE?PE.grupos:['A1','A2','B','C1','C2','E']),c.grupo||'C1'))+
     campo('Desde el','<input type="date" id="pn-fGrupo2" value="'+(c.fGrupo2||'')+'">')+
-    campo('IPT al mes, €',inp('pn-iptMes',c.iptMes==null?'':String(c.iptMes).replace('.',','),{attr:' inputmode="decimal"'}))+
+    /*IPT*/(EN_BLANCO?'':campo('IPT al mes, €',inp('pn-iptMes',c.iptMes==null?'':String(c.iptMes).replace('.',','),{attr:' inputmode="decimal"'}))+
     campo('Pagas de la IPT',inp('pn-iptPagas',c.iptPagas,{t:'number'}))+
-    campo('IPT, % de tu base',inp('pn-iptPct',c.iptPct,{t:'number'}))+
+    campo('IPT, % de tu base',inp('pn-iptPct',c.iptPct,{t:'number'})))+/*/IPT*/
     campo('Jubilación forzosa a los',inp('pn-edadForzosa',c.edadForzosa,{t:'number'}))+
     campo('Prórroga hasta los',inp('pn-edadMaxProlong',c.edadMaxProlong,{t:'number'}))+
     campo('Años cotizados antes de ser funcionario',inp('pn-aniosRGSSprevios',c.aniosRGSSprevios,{t:'number'}))+
     campo('IRPF de',sel('pn-ccaa',(PE?PE.ccaas:['Comunitat Valenciana']),c.ccaa||'Comunitat Valenciana'))+
     campo('Discapacidad reconocida',sel('pn-discapacidad',[['0','0 %'],['33','33 %'],['65','65 %']],String(c.discapacidad==null?33:c.discapacidad)))+'</div>'+
-    '<label class="chk"><input type="checkbox" id="pn-ipt20"'+(c.ipt20?' checked':'')+'> Contar el +20 % de la IPT al jubilarte</label>'+
+    /*IPT*/(EN_BLANCO?'':'<label class="chk"><input type="checkbox" id="pn-ipt20"'+(c.ipt20?' checked':'')+'> Contar el +20 % de la IPT al jubilarte</label>')+/*/IPT*/
     '<label class="chk"><input type="checkbox" id="pn-demoraOn"'+(c.demoraOn?' checked':'')+'> Contar el complemento por demora</label>'+
-    '<label class="chk"><input type="checkbox" id="pn-totaliza"'+(c.totaliza?' checked':'')+'> Totalizar mis años del Régimen General (obliga a renunciar a la IPT)</label>'+
+    '<label class="chk"><input type="checkbox" id="pn-totaliza"'+(c.totaliza?' checked':'')+'> Totalizar mis años del Régimen General'+/*IPT*/(EN_BLANCO?'':' (obliga a renunciar a la IPT)')+/*/IPT*/'</label>'+
     '<label class="chk"><input type="checkbox" id="pn-asistencia"'+(c.asistencia?' checked':'')+'> Necesito ayuda de tercera persona o tengo movilidad reducida</label>'+
     '<div class="acciones"><button type="button" class="btn sec" id="pn-guardar">Guardar</button></div>';
   if(PE){
     f+='<h3 class="h3">Revalorizaciones</h3><p class="pie">Cuando se publique la de un año, escríbela y todo lo posterior se recalcula. En blanco se usa el '+String(Math.round(c.revalDefault*1000)/10).replace('.',',')+' % por defecto.</p>'+
       campo('Por defecto, %',inp('rv-def',String(Math.round(c.revalDefault*1000)/10).replace('.',','),{attr:' inputmode="decimal"'}))+
-      tabla(['Año','Clases Pasivas, %','IPT, %','Haber regulador','IPT al mes'],PE.reval.map(r=>[r.y,
+      tabla(/*IPT*/hayIPT()?['Año','Clases Pasivas, %','IPT, %','Haber regulador','IPT al mes']:/*/IPT*/['Año','Clases Pasivas, %','Haber regulador'],PE.reval.map(r=>/*IPT*/hayIPT()?[r.y,
         inp('rv-cp-'+r.y,r.propioCp==null?'':String(Math.round(r.propioCp*1000)/10).replace('.',','),{ph:String(Math.round(r.cp*1000)/10).replace('.',','),attr:' class="corto" inputmode="decimal"'}),
         inp('rv-ipt-'+r.y,r.propioIpt==null?'':String(Math.round(r.propioIpt*1000)/10).replace('.',','),{ph:String(Math.round(r.ipt*1000)/10).replace('.',','),attr:' class="corto" inputmode="decimal"'}),
-        eur(r.hab,0),eur(r.iptMes,2)]))+
+        eur(r.hab,0),eur(r.iptMes,2)]:/*/IPT*/[r.y,
+        inp('rv-cp-'+r.y,r.propioCp==null?'':String(Math.round(r.propioCp*1000)/10).replace('.',','),{ph:String(Math.round(r.cp*1000)/10).replace('.',','),attr:' class="corto" inputmode="decimal"'}),
+        eur(r.hab,0)]))+
       '<div class="acciones"><button type="button" class="btn sec" id="rv-guardar">Guardar revalorizaciones</button></div>';
   }
   return '<h2 id="fu-datos">Tus datos de la pensión</h2>'+plegable('fu-datos-p','Cambiar tus datos y las revalorizaciones',f);
@@ -17283,16 +17388,16 @@ function enlazarFuturo(){
     cambiar('aportación de la proyección cambiada',()=>E('setProjAporte('+jsq(m)+')'),{respuestas:r});});
   const g=$('#pn-guardar'); if(g)g.onclick=()=>{
     const PE=Q('pension',P=>P.pension()), c=PE?PE.cfg:{};
-    const campos=['nacimientoFecha','fIngreso','grupoIni','grupo','fGrupo2','iptMes','iptPagas','iptPct','edadForzosa','edadMaxProlong','aniosRGSSprevios','ccaa','discapacidad'];
-    const bools=['ipt20','demoraOn','totaliza','asistencia'];
+    const campos=['nacimientoFecha','fIngreso','grupoIni','grupo','fGrupo2',/*IPT*/'iptMes','iptPagas','iptPct',/*/IPT*/'edadForzosa','edadMaxProlong','aniosRGSSprevios','ccaa','discapacidad'];
+    const bools=[/*IPT*/'ipt20',/*/IPT*/'demoraOn','totaliza','asistencia'];
     cambiar('datos de la pensión guardados',()=>{
-      campos.forEach(k=>{const v=val('pn-'+k); if(String(v)!==String(c[k]==null?'':c[k]).replace('.',',')&&!(k==='iptMes'&&numIn('pn-iptMes')===Number(c.iptMes))) E('setPension('+jsq(k)+','+jsq(v)+')');});
-      bools.forEach(k=>{const v=$('#pn-'+k).checked; if(v!==!!c[k])E('setPension('+jsq(k)+','+v+')');});
+      campos.filter(k=>document.getElementById('pn-'+k)).forEach(k=>{const v=val('pn-'+k); if(String(v)!==String(c[k]==null?'':c[k]).replace('.',',')/*IPT*/&&!(k==='iptMes'&&numIn('pn-iptMes')===Number(c.iptMes))/*/IPT*/) E('setPension('+jsq(k)+','+jsq(v)+')');});
+      bools.filter(k=>document.getElementById('pn-'+k)).forEach(k=>{const v=$('#pn-'+k).checked; if(v!==!!c[k])E('setPension('+jsq(k)+','+v+')');});
     });};
   const rv=$('#rv-guardar'); if(rv)rv.onclick=()=>{const PE=Q('pension',P=>P.pension()); if(!PE)return;
     cambiar('revalorizaciones guardadas',()=>{
       const d=val('rv-def'); if(d.trim()!=='')E('setPension("revalDefaultPct",'+jsq(d)+')');
-      PE.reval.forEach(r=>{['cp','ipt'].forEach(k=>{const v=val('rv-'+k+'-'+r.y).trim(), antes=(k==='cp'?r.propioCp:r.propioIpt);
+      PE.reval.forEach(r=>{['cp'/*IPT*/,'ipt'/*/IPT*/].forEach(k=>{const v=val('rv-'+k+'-'+r.y).trim(), antes=(/*IPT*/k==='cp'?/*/IPT*/r.propioCp/*IPT*/:r.propioIpt/*/IPT*/);
         const vn=v===''?null:Number(v.replace(',','.'))/100; if((vn==null&&antes!=null)||(vn!=null&&(antes==null||Math.abs(vn-antes)>1e-9)))E('setPensionReval('+r.y+','+jsq(k)+','+jsq(v)+')');});});});};
 }
 PINTORES.futuro=[pFuturo,enlazarFuturo];
@@ -17315,7 +17420,7 @@ function pDecis(){
     '<div class="linea-res">'+(Pa?'en pareja; tú solo, <span class="num">'+eur(S.precio,0)+'</span>':'tú solo')+', con lo que miraría un banco. Te limita '+((Pa||S).limita==='cuota'?'la cuota: más sueldo o menos deudas subirían el precio':'la entrada, no el sueldo: más ahorro sube el precio mucho más que más ingresos')+'.</div>';
   const col=(f)=>Pa?[f(S),f(Pa)]:[f(S)];
   const filas=[
-    ['Ingreso neto al mes<small>'+(c.conProd?'con productividad':'sin productividad ni remanente')+'</small>',...col(r=>eur(r.ingreso))],
+    ['Ingreso neto al mes<small>'+((esAGE()&&rentaOK())?(c.conProd?'con productividad':'sin productividad ni remanente'):'la media de tus nóminas de los últimos 12 meses')+'</small>',...col(r=>eur(r.ingreso))],
     ['Cuota máxima<small>el '+c.esfuerzo+' % del ingreso'+(Number(c.otrasCuotas)?', menos otras cuotas':'')+'</small>',...col(r=>eur(r.cuotaMax))],
     ['Plazo',...col(r=>r.anios+' años<small>acabarías con '+r.edadFin+'</small>')],
     ['Préstamo máximo<small>al '+String(c.tipo).replace('.',',')+' %</small>',...col(r=>eur(r.prestMax))],
@@ -17325,12 +17430,15 @@ function pDecis(){
     Object.assign(['Cuota',...col(r=>eur(r.cuota))],{attr:' class="suma"'}),
     ['Intereses en total',...col(r=>eur(r.intereses))]];
   s+=tabla(Pa?['','Tú solo','En pareja']:['',''],filas);
+  if(V.edadSupuesta)s+='<p class="pie">Sin tu fecha de nacimiento, el plazo supone que tienes 40 años. Ponla en Futuro, en tus datos de la pensión.</p>';
   s+=plegable('dc-aj','Ajustes del cálculo','<div class="rango">'+
     campo('Interés, %',inp('bc-tipo',String(c.tipo).replace('.',','),{attr:' inputmode="decimal"'}))+
     campo('Cuota máxima, % del ingreso',inp('bc-esfuerzo',c.esfuerzo,{t:'number'}))+
     campo('Plazo máximo, años',inp('bc-plazoMax',c.plazoMax,{t:'number'}))+
     campo('Acabar de pagar antes de los',inp('bc-edadFin',c.edadFin,{t:'number'}))+
-    campo('Impuesto de compra',sel('bc-impuesto',[['itp9','Segunda mano, ITP 9 %'],['nueva','Nueva, IVA y AJD']],c.impuesto))+
+    campo('Impuesto de compra',sel('bc-impuesto',[['itp9',EN_BLANCO?'Segunda mano, ITP':'Segunda mano, ITP 9 %'],['nueva','Nueva, IVA y AJD']],c.impuesto))+
+    (EN_BLANCO?campo('ITP de tu comunidad, %',inp('bc-itpPct',c.itpPct==null?10:String(c.itpPct).replace('.',','),{attr:' inputmode="decimal"'}),'mira el de tu comunidad: va del 6 al 11 %')+
+      campo('AJD de tu comunidad, %',inp('bc-ajdPct',c.ajdPct==null?1.5:String(c.ajdPct).replace('.',','),{attr:' inputmode="decimal"'}),'solo en vivienda nueva'):'')+
     campo('Gastos de compra, %',inp('bc-gastosCompra',String(c.gastosCompra).replace('.',','),{attr:' inputmode="decimal"'}))+
     campo('Otras cuotas al mes, €',inp('bc-otrasCuotas',c.otrasCuotas||'',{attr:' inputmode="decimal"'}))+
     campo('Ahorro para la entrada, €',inp('bc-ahorroEntrada',c.ahorroEntrada==null?'':c.ahorroEntrada,{ph:'toda tu liquidez',attr:' inputmode="decimal"'}))+
@@ -17338,7 +17446,7 @@ function pDecis(){
     campo('Ahorro de tu pareja, €',inp('bc-parejaAhorro',c.parejaAhorro||'',{attr:' inputmode="decimal"'}))+
     campo('Edad de tu pareja',inp('bc-parejaEdad',c.parejaEdad||'',{t:'number'}))+'</div>'+
     '<label class="chk"><input type="checkbox" id="bc-vender"'+(c.vender?' checked':'')+'> Vendo la casa actual para la entrada</label>'+
-    '<label class="chk"><input type="checkbox" id="bc-conProd"'+(c.conProd?' checked':'')+'> Contar la productividad como ingreso</label>'+
+    ((esAGE()&&rentaOK())?'<label class="chk"><input type="checkbox" id="bc-conProd"'+(c.conProd?' checked':'')+'> Contar la productividad como ingreso</label>':'')+
     '<div class="acciones"><button type="button" class="btn sec" id="bc-guardar">Guardar</button></div>');
   // ── Mantenerla ──
   const G=V.gastos;
@@ -17383,9 +17491,9 @@ function pDecis(){
 function enlazarDecis(){
   const V=()=>Q('vivienda',P=>P.vivienda());
   const bc=$('#bc-guardar'); if(bc)bc.onclick=()=>cambiar('ajustes de la vivienda guardados',()=>{
-    ['tipo','esfuerzo','plazoMax','edadFin','gastosCompra','otrasCuotas','parejaNeto','parejaAhorro','parejaEdad','ahorroEntrada'].forEach(k=>E('setBien('+jsq('calc.'+k)+','+jsq(val('bc-'+k))+',"num")'));
+    ['tipo','esfuerzo','plazoMax','edadFin','gastosCompra','otrasCuotas','parejaNeto','parejaAhorro','parejaEdad','ahorroEntrada','itpPct','ajdPct'].filter(k=>document.getElementById('bc-'+k)).forEach(k=>E('setBien('+jsq('calc.'+k)+','+jsq(val('bc-'+k))+',"num")'));
     E('setBien("calc.impuesto",'+jsq(val('bc-impuesto'))+')');
-    ['vender','conProd'].forEach(k=>E('setBien('+jsq('calc.'+k)+','+$('#bc-'+k).checked+',"bool")'));});
+    ['vender','conProd'].filter(k=>document.getElementById('bc-'+k)).forEach(k=>E('setBien('+jsq('calc.'+k)+','+$('#bc-'+k).checked+',"bool")'));});
   const vg=$('#vg-guardar'); if(vg)vg.onclick=()=>{const v=V(); cambiar('gastos de la vivienda guardados',()=>{
     v.gastos.filas.forEach(g=>{const x=val('vg-'+g.k).trim(); if(x!==''||g.propio)E('setBien('+jsq('gastos.'+g.k)+','+jsq(x)+',"num")');});
     E('setBien("gastos.mantPct",'+jsq(val('vg-mantPct'))+',"num")');
@@ -17411,7 +17519,6 @@ PINTORES.decis=[pDecis,enlazarDecis];
 const MA={que:''};
 function hoyISO(){ return HOY(); }
 function extrasBuzon(){
-  if(!DB)return '';
   const L=Q('listas',P=>P.listas());
   if(!L)return '';
   let s='<h2 id="bz-mano">Apuntar a mano</h2><p class="pie">Lo que no llega en un archivo: el efectivo de casa, un saldo, una compra, una aportación… Queda en las dos apps y se puede deshacer.</p>';
@@ -17566,6 +17673,321 @@ function restaurarCopia(json){
   const b0=buzon, e0=enlazarBuzon;
   buzon=function(){ return b0()+extrasBuzon(); };
   enlazarBuzon=function(){ e0(); enlazarExtrasBuzon(); };
+})();
+
+
+// ════════════════════════════════════════════════════════════════════
+// CUALQUIER BANCO Y CUALQUIER BRÓKER (Excel o CSV)
+// ════════════════════════════════════════════════════════════════════
+// Bankinter, Trade Republic, DEGIRO y XTB siguen entrando por sus lectores de
+// siempre. Para el resto, las columnas se reconocen por su nombre (fecha,
+// concepto, importe o cargo y abono, saldo; producto, ISIN, títulos, precio,
+// valor…) en español, inglés, alemán, francés o portugués. Si no se reconocen,
+// las eliges tú una vez y se recuerdan para ese banco.
+const GV={
+  fecha:/^(f\.?\s*(valor|operaci[oó]n|operativa|contable)|fecha|date|datum|data|booking|value date|transaction date|trade date|started date|completed date|date\/time|fecha operaci[oó]n|fecha valor|fecha de operaci[oó]n|fecha ejecuci[oó]n|fecha contable)/i,
+  isin:/\bisin\b/i,
+  titulos:/t[ií]tulos|^cantidad$|quantity|^qty|shares|acciones|participaciones|^n[uú]mero|units|^nominal|anzahl|quantit[eé]/i,
+  precio:/precio|price|cotizaci[oó]n|kurs|cours|pre[çc]o/i,
+  comision:/comisi[oó]n|^fee|fees|gastos|costes|commission|comm\/fee|brokerage|geb[uü]hr|frais/i,
+  divisa:/^divisa|^moneda|currency|w[äa]hrung|devise/i,
+  tipo:/^tipo( de)? operaci[oó]n|^operaci[oó]n$|^side$|buy\/sell|compra\/venta|^type$|^transaction type|^tipo$/i,
+  cargo:/^cargo|^debe$|d[eé]bito|^salida|withdraw|money out|paid out|^debit|ausgang|d[eé]bit/i,
+  abono:/^abono|^haber$|cr[eé]dito|^entrada|deposit|money in|paid in|^credit|eingang|cr[eé]dit/i,
+  saldo:/^saldo|balance|disponible|kontostand|solde/i,
+  importe:/^importe|^amount|^cantidad \(|^monto|betrag|montant|proceeds|net amount|^total|valor total|^import|montante|^value$/i,
+  valor:/valor de mercado|market value|valor en eur|value in eur|^valoraci[oó]n|^position value|^marktwert|^valeur|valor actual|current value/i,
+  producto:/^producto|^product|instrumento|instrument|^valor$|security|s[ií]mbolo|symbol|ticker|^nombre|^name$|activo|asset|wertpapier|^titre/i,
+  concepto:/concepto|descrip|detalle|^movimiento|beneficiario|payee|referencia|^texto|asunto|motivo|comercio|details|narrative|counterparty|merchant|memo|verwendungszweck|libell[eé]|descri[çc][aã]o/i
+};
+const G_ORDEN=['fecha','isin','titulos','precio','comision','divisa','tipo','cargo','abono','saldo','importe','valor','producto','concepto'];
+const gTxt=v=>String(v==null?'':v).replace(/\s+/g,' ').trim();
+function gFecha(v){
+  if(v==null||v==='')return null;
+  if(v instanceof Date&&!isNaN(v))return v.toISOString().slice(0,10);
+  if(typeof v==='number'&&v>20000&&v<80000){ const d=new Date(Math.round((v-25569)*864e5)); return d.toISOString().slice(0,10); }
+  const s=gTxt(v);
+  let m=s.match(/^(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})/); if(m)return m[1]+'-'+m[2].padStart(2,'0')+'-'+m[3].padStart(2,'0');
+  m=s.match(/^(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{2,4})/);
+  if(m){ let d=+m[1], mo=+m[2], y=+m[3]; if(y<100)y+=2000; if(mo>12&&d<=12){const t=d;d=mo;mo=t;}
+    if(mo<1||mo>12||d<1||d>31)return null; return y+'-'+String(mo).padStart(2,'0')+'-'+String(d).padStart(2,'0'); }
+  const MES={ene:1,jan:1,feb:2,mar:3,abr:4,apr:4,may:5,jun:6,jul:7,ago:8,aug:8,sep:9,set:9,oct:10,okt:10,nov:11,dic:12,dec:12,dez:12};
+  m=s.toLowerCase().match(/^(\d{1,2})[\s.-]+([a-zé]{3})[a-zé]*\.?[\s.-]+(\d{4})/); if(m&&MES[m[2]])return m[3]+'-'+String(MES[m[2]]).padStart(2,'0')+'-'+m[1].padStart(2,'0');
+  return null;
+}
+function gNum(v){
+  if(v==null||v==='')return null;
+  if(typeof v==='number')return isFinite(v)?v:null;
+  let s=gTxt(v).replace(/[€$£\s]|EUR|USD|GBP|CHF/gi,'');
+  if(!s)return null;
+  let neg=false;
+  if(/^\(.*\)$/.test(s)){neg=true;s=s.slice(1,-1);}
+  if(/-$/.test(s)){neg=true;s=s.slice(0,-1);}
+  if(/^[+-]/.test(s)){neg=s[0]==='-';s=s.slice(1);}
+  if(!/^[\d.,']+$/.test(s))return null;
+  s=s.replace(/'/g,'');
+  const c=s.lastIndexOf(','), p=s.lastIndexOf('.');
+  if(c>=0&&p>=0){ s=c>p?s.replace(/\./g,'').replace(',','.'):s.replace(/,/g,''); }
+  else if(c>=0){ s=(/^\d{1,3}(,\d{3})+$/.test(s)&&s.split(',').pop().length===3&&!/^0,/.test(s))?s.replace(/,/g,''):s.replace(',','.'); }
+  else if(p>=0&&/^\d{1,3}(\.\d{3})+$/.test(s)){ s=s.replace(/\./g,''); }
+  const n=Number(s); if(!isFinite(n))return null; return neg?-n:n;
+}
+// La fila de cabeceras y qué columna es cada cosa
+function gCabecera(rows){
+  let mejor=null;
+  for(let i=0;i<Math.min(40,rows.length);i++){
+    const r=(rows[i]||[]).map(gTxt); if(r.filter(Boolean).length<2)continue;
+    const cols={}, usado=new Set();
+    G_ORDEN.forEach(k=>{ const j=r.findIndex((c,jj)=>c&&!usado.has(jj)&&GV[k].test(c)); if(j>=0){cols[k]=j;usado.add(j);} });
+    const has=k=>cols[k]!=null;
+    let clase=null, pts=0;
+    if(has('titulos')&&(has('producto')||has('isin'))&&(has('precio')||has('importe'))&&has('fecha')){clase='ops';pts=10;}
+    else if(has('titulos')&&(has('producto')||has('isin'))&&(has('valor')||has('importe'))&&!has('fecha')){clase='pos';pts=9;}
+    else if(has('fecha')&&(has('importe')||has('cargo')||has('abono'))&&(has('concepto')||has('producto'))){clase='banco';pts=8;
+      if(!has('concepto')&&has('producto')){cols.concepto=cols.producto;delete cols.producto;}}
+    if(clase&&(!mejor||pts>mejor.pts))mejor={hi:i,cols,clase,pts,cab:r};
+  }
+  return mejor;
+}
+// ¿lo lee ya la app de siempre? (Bankinter y la exportación de Trade Republic)
+function gNativo(rows){
+  const hi=rows.findIndex(r=>(r||[]).some(c=>/descrip|description/i.test(c))&&(r||[]).some(c=>/importe|salida|entrada|amount/i.test(c)));
+  if(hi<0)return false;
+  const h=rows[hi].map(c=>gTxt(c).toLowerCase());
+  if(h.includes('transaction_id')||h.includes('asset_class'))return true;
+  const d=h.findIndex(c=>c==='date')>=0||h.findIndex(c=>/fecha|date/.test(c))>=0;
+  return d&&h.findIndex(c=>/descrip|concepto|description/.test(c))>=0;
+}
+function gFirma(cab){ return (cab||[]).map(c=>gTxt(c).toLowerCase()).join('|').slice(0,300); }
+function gMapaGuardado(firma){ try{ return (JSON.parse(localStorage.getItem('dlv2_mapas')||'{}'))[firma]||null; }catch(e){ return null; } }
+function gGuardaMapa(firma,m){ try{ const o=JSON.parse(localStorage.getItem('dlv2_mapas')||'{}'); o[firma]=m; localStorage.setItem('dlv2_mapas',JSON.stringify(o)); }catch(e){} }
+// Filas de datos ya interpretadas
+function gFilas(rows,m){
+  const out=[];
+  for(let i=m.hi+1;i<rows.length;i++){
+    const r=rows[i]||[]; const g=k=>m.cols[k]!=null?r[m.cols[k]]:null;
+    if(m.clase==='banco'){
+      const f=gFecha(g('fecha')); if(!f)continue;
+      let imp=m.cols.importe!=null?gNum(g('importe')):null;
+      if(imp==null&&(m.cols.cargo!=null||m.cols.abono!=null)){ const c=gNum(g('cargo')), a=gNum(g('abono'));
+        if(c==null&&a==null)continue; imp=(a?Math.abs(a):0)-(c?Math.abs(c):0); }
+      if(imp==null||imp===0)continue;
+      out.push({fecha:f,concepto:gTxt(g('concepto'))||'(sin concepto)',importe:imp,saldo:m.cols.saldo!=null?gNum(g('saldo')):null});
+    } else if(m.clase==='ops'){
+      const f=gFecha(g('fecha')); const n=gNum(g('titulos')); if(!f||!n)continue;
+      const tipo=gTxt(g('tipo')).toLowerCase();
+      let lado=/venta|sell|sale|vend|reembolso|verkauf/.test(tipo)?'venta':(/compra|buy|purchase|suscrip|kauf|achat/.test(tipo)?'compra':(n<0?'venta':'compra'));
+      const imp=gNum(g('importe')), pr=gNum(g('precio'));
+      out.push({fecha:f,producto:gTxt(g('producto')),isin:gTxt(g('isin')).toUpperCase(),lado,titulos:Math.abs(n),precio:pr!=null?Math.abs(pr):null,
+        importe:imp!=null?Math.abs(imp):null,comision:Math.abs(gNum(g('comision'))||0),divisa:(gTxt(g('divisa'))||'EUR').toUpperCase().slice(0,3)});
+    } else {
+      const n=gNum(g('titulos')), v=gNum(g('valor')!=null?g('valor'):g('importe')); if(!n||v==null)continue;
+      out.push({producto:gTxt(g('producto')),isin:gTxt(g('isin')).toUpperCase(),titulos:Math.abs(n),valor:Math.abs(v),fecha:m.cols.fecha!=null?gFecha(g('fecha')):null});
+    }
+  }
+  return out;
+}
+function gMapa(it,rows){
+  if(it.opc&&it.opc.mapa)return it.opc.mapa;
+  const a=gCabecera(rows); if(!a)return null;
+  const guardado=gMapaGuardado(gFirma(a.cab));
+  return guardado?Object.assign({},a,guardado,{hi:a.hi}):a;
+}
+// Lo que se enseña para elegir columnas
+function gColumnas(rows){
+  const a=gCabecera(rows); let hi=a?a.hi:0;
+  if(!a){ for(let i=0;i<Math.min(40,rows.length);i++){ if((rows[i]||[]).filter(c=>gTxt(c)).length>=3){hi=i;break;} } }
+  const cab=(rows[hi]||[]).map((c,j)=>{ const ej=rows.slice(hi+1,hi+4).map(r=>gTxt((r||[])[j])).filter(Boolean)[0]||''; return [j,(gTxt(c)||'Columna '+(j+1))+(ej?' ('+ej.slice(0,18)+')':'')]; });
+  return {hi,cab,a};
+}
+// Cuenta del banco: la elegida, o la que se parezca por nombre
+function gCanonBanco(F){
+  const out=[['Fecha','Descripción','Importe','Saldo']];
+  F.forEach(x=>{ const [y,m,d]=x.fecha.split('-');
+    out.push([d+'/'+m+'/'+y,x.concepto,String(x.importe.toFixed(2)).replace('.',','),x.saldo==null?'':String(x.saldo.toFixed(2)).replace('.',',')]); });
+  return out;
+}
+// ─── Aplicar con el motor de siempre ─────────────────────────────────
+function gBuscarAccion(x){
+  const S=E('cfg.stocks')||[];
+  const norm=s=>String(s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\b(s\.?a\.?|s\.?e\.?|plc|inc\.?|ag|n\.?v\.?|corp\.?|ltd\.?|group|sas|spa|s\.?p\.?a\.?|class [a-z])\b/g,'').replace(/[^a-z0-9]/g,'');
+  if(x.isin){ const s=S.find(s=>String(s.isin||'').toUpperCase()===x.isin); if(s)return s; }
+  const n=norm(x.producto); if(!n)return null;
+  return S.find(s=>norm(s.name)===n)||S.find(s=>{const m=norm(s.name);return m&&(m.startsWith(n)||n.startsWith(m));})||null;
+}
+function gOps(F){
+  const T=E('transactions')||[], res={compras:0,ventas:0,repetidas:0,sinAccion:[],sinCambio:[]};
+  F.forEach(x=>{
+    const s=gBuscarAccion(x);
+    if(s&&T.some(t=>t.stockId===s.id&&t.type===(x.lado==='venta'?'sell':'buy')&&t.date===x.fecha&&Math.abs((t.shares||0)-x.titulos)<1e-4)){res.repetidas++;return;}
+    let pr=x.precio, cur=x.divisa||'EUR';
+    if(x.importe!=null&&x.titulos>0&&(cur==='EUR'||x.precio==null)){ pr=(x.importe-(x.lado==='compra'?0:0))/x.titulos; cur='EUR'; }
+    if(pr==null){res.sinCambio.push(x.producto||x.isin);return;}
+    if(cur!=='EUR'){res.sinCambio.push(x.producto||x.isin);return;}
+    const fijar=(id,v)=>FD.__fijar(id,{value:String(v)});
+    if(x.lado==='compra'){
+      fijar('ns-edit-id','');fijar('ns-name',s?s.name:(x.producto||x.isin));fijar('ns-date',x.fecha);fijar('ns-shares',x.titulos);fijar('ns-cur','EUR');
+      fijar('ns-price',pr);fijar('ns-rate','');fijar('ns-costs',x.comision||0);fijar('ns-mktval','');fijar('ns-idea','');fijar('ns-idea-otros','');fijar('ns-setup','');
+      E('addStockBuy()'); res.compras++;
+      if(x.isin){ const n=gBuscarAccion({producto:s?s.name:x.producto}); if(n&&!n.isin)n.isin=x.isin; }
+    } else {
+      if(!s){res.sinAccion.push(x.producto||x.isin);return;}
+      fijar('sv-edit-id','');fijar('sv-stock',s.id);fijar('sv-date',x.fecha);fijar('sv-shares',x.titulos);fijar('sv-cur','EUR');fijar('sv-price',pr);
+      fijar('sv-rate','');fijar('sv-costs',x.comision||0);fijar('sv-exit','');FD.__fijar('sv-full',{checked:false});
+      E('addStockSell()'); res.ventas++;
+    }
+  });
+  E('save()');
+  return res;
+}
+function gPos(F,fechaArchivo){
+  const res={valoradas:0,sinAccion:[]};
+  F.forEach(x=>{
+    const s=gBuscarAccion(x); if(!s){res.sinAccion.push(x.producto||x.isin);return;}
+    const f=x.fecha||fechaArchivo;
+    FD.__fijar('bal-stock-date-'+s.id,{value:f});FD.__fijar('svcur-'+s.id,{value:'EUR'});FD.__fijar('bal-stock-amt-'+s.id,{value:String(x.valor)});
+    E('addStockValue('+JSON.stringify(s.id)+')'); res.valoradas++;
+  });
+  E('save()');
+  return res;
+}
+// ─── Enganches con el buzón ─────────────────────────────────────────
+(function(){
+  const d0=detectar, e0=ejecutar, t0=tarjeta, ds0=describir, ap0=aplicable, en0=enlazarBuzon;
+  detectar=async function(file){
+    const it=await d0(file);
+    if(it.tipo==='banco'){
+      try{ const F=E('bankFilas')(it.buf); it.filas0=F;
+        if(F&&F.length&&!gNativo(F)){ const a=gCabecera(F); if(a&&a.clase==='ops')it.tipo='g_ops'; else if(a&&a.clase==='pos')it.tipo='g_pos'; else it.generico=true; }
+      }catch(e){}
+    }
+    return it;
+  };
+  ejecutar=async function(it){
+    if(it.tipo==='banco'&&it.generico){
+      const F=it.filas0||E('bankFilas')(it.buf); const m=gMapa(it,F);
+      if(!m){ it.necesitaMapa=true; throw new Error('No sé qué columna es cada cosa. Dímelo abajo una vez y lo recordaré para este banco.'); }
+      const filas=gFilas(F,Object.assign({},m,{clase:'banco'}));
+      if(!filas.length){ it.necesitaMapa=true; throw new Error('Con esas columnas no sale ningún movimiento. Revisa cuál es la fecha y cuál el importe.'); }
+      it.necesitaMapa=false; it.mapaUsado=m;
+      E('_bankTR=false'); E('processBankRows')(gCanonBanco(filas));
+      return;
+    }
+    if(it.tipo==='g_ops'||it.tipo==='g_pos'){
+      const F=it.filas0||E('bankFilas')(it.buf); const m=gMapa(it,F);
+      if(!m){ it.necesitaMapa=true; throw new Error('No sé qué columna es cada cosa. Dímelo abajo.'); }
+      const filas=gFilas(F,Object.assign({},m,{clase:it.tipo==='g_ops'?'ops':'pos'}));
+      if(!filas.length){ it.necesitaMapa=true; throw new Error('Con esas columnas no sale ninguna línea. Revisa las columnas.'); }
+      it.necesitaMapa=false; it.mapaUsado=m;
+      const fa=it.file&&it.file.lastModified?new Date(it.file.lastModified).toISOString().slice(0,10):todayISOnueva();
+      it.gres=it.tipo==='g_ops'?gOps(filas):gPos(filas,fa);
+      return;
+    }
+    return e0(it);
+  };
+  describir=function(it){
+    if(it.tipo==='g_ops')return 'Operaciones de un bróker';
+    if(it.tipo==='g_pos')return 'Cartera de un bróker';
+    if(it.tipo==='banco'&&it.generico)return 'Extracto de un banco';
+    return ds0(it);
+  };
+  aplicable=function(it){ if(it.necesitaMapa)return false; return ap0(it); };
+  tarjeta=function(it){
+    let h=t0(it);
+    const gen=(it.tipo==='banco'&&it.generico)||it.tipo==='g_ops'||it.tipo==='g_pos';
+    if(!gen)return h;
+    let extra='';
+    if(it.gres&&!it.error){ const r=it.gres;
+      extra+='<p class="estado">'+(it.tipo==='g_ops'?('<b>'+r.compras+'</b> compra(s) y <b>'+r.ventas+'</b> venta(s)'+(r.repetidas?', y '+r.repetidas+' que ya tenías':'')):('<b>'+r.valoradas+'</b> acción(es) valoradas'))+'.</p>'+
+        ((r.sinAccion&&r.sinAccion.length)?'<p class="pie">No encuentro entre tus acciones: '+esc(r.sinAccion.slice(0,6).join(', '))+(r.sinAccion.length>6?'…':'')+'. '+(it.tipo==='g_pos'?'Importa antes sus compras.':'Para vender, antes tiene que estar su compra.')+'</p>':'')+
+        ((r.sinCambio&&r.sinCambio.length)?'<p class="pie">En otra moneda y sin importe en euros, no entran: '+esc(r.sinCambio.slice(0,6).join(', '))+'. Apúntalas a mano con su cambio.</p>':'');
+    }
+    // elegir o corregir columnas
+    const F=it.filas0||[]; if(!F.length)return h.replace('</div></div>',extra+'</div></div>');
+    const C=gColumnas(F), m=it.mapaUsado||(it.opc&&it.opc.mapa)||C.a||{hi:C.hi,cols:{}};
+    const campos=it.tipo==='g_ops'?[['fecha','Fecha'],['producto','Producto'],['isin','ISIN'],['tipo','Compra o venta'],['titulos','Títulos'],['precio','Precio'],['importe','Importe en euros'],['comision','Comisión'],['divisa','Moneda']]
+      :(it.tipo==='g_pos'?[['producto','Producto'],['isin','ISIN'],['titulos','Títulos'],['valor','Valor en euros'],['fecha','Fecha']]
+        :[['fecha','Fecha'],['concepto','Concepto'],['importe','Importe'],['cargo','Cargo (si va aparte)'],['abono','Abono (si va aparte)'],['saldo','Saldo']]);
+    const opts=[['','—']].concat(C.cab.map(([j,t])=>[String(j),t]));
+    const form='<div class="rango">'+campos.map(([k,t])=>campo(t,sel('gm-'+it.id+'-'+k,opts,m.cols&&m.cols[k]!=null?String(m.cols[k]):''))).join('')+'</div>'+
+      '<div class="acciones"><button type="button" class="btn sec" data-gmapa="'+it.id+'">Usar estas columnas</button></div>';
+    extra+=it.necesitaMapa?('<p class="estado">Dime qué es cada columna. Lo recordaré para los próximos archivos de este banco o bróker.</p>'+form)
+      :plegable('gm-'+it.id,'Ver o cambiar qué columna es cada cosa',form);
+    const i=h.lastIndexOf('<div class="acciones">');
+    return i>=0?h.slice(0,i)+extra+h.slice(i):h+extra;
+  };
+  enlazarBuzon=function(){
+    en0();
+    document.querySelectorAll('[data-gmapa]').forEach(b=>b.onclick=async()=>{
+      const it=COLA.find(x=>x.id===b.dataset.gmapa); if(!it)return;
+      const F=it.filas0||[]; const C=gColumnas(F);
+      const cols={}; ['fecha','concepto','importe','cargo','abono','saldo','producto','isin','tipo','titulos','precio','comision','divisa','valor'].forEach(k=>{
+        const e=document.getElementById('gm-'+it.id+'-'+k); if(e&&e.value!=='')cols[k]=+e.value; });
+      const clase=it.tipo==='g_ops'?'ops':(it.tipo==='g_pos'?'pos':'banco');
+      const m={hi:C.hi,cols,clase};
+      it.opc=it.opc||{}; it.opc.mapa=m; gGuardaMapa(gFirma((F[C.hi]||[])),{cols,clase});
+      await simular(it); pintar();
+    });
+  };
+})();
+function todayISOnueva(){ return new Date().toISOString().slice(0,10); }
+
+
+// ════════════════════════════════════════════════════════════════════
+// ARCHIVOS .ZIP (XTB los da así: un .zip con el Excel dentro)
+// ════════════════════════════════════════════════════════════════════
+// Se abren con el descompresor del propio navegador, no con el lector de
+// Excel, que en el iPad podía fallar con el .zip. Cada hoja de cálculo, CSV o
+// PDF de dentro entra en el buzón como si lo hubieras echado tú.
+async function abrirZip(file){
+  const buf=new Uint8Array(await file.arrayBuffer());
+  if(!(buf[0]===0x50&&buf[1]===0x4B))return null;
+  let eocd=-1;
+  for(let i=buf.length-22;i>=Math.max(0,buf.length-65557);i--){ if(buf[i]===0x50&&buf[i+1]===0x4B&&buf[i+2]===0x05&&buf[i+3]===0x06){eocd=i;break;} }
+  if(eocd<0)return null;
+  const dv=new DataView(buf.buffer,buf.byteOffset,buf.byteLength);
+  const n=dv.getUint16(eocd+10,true), cd=dv.getUint32(eocd+16,true), td=new TextDecoder();
+  const ent=[]; let p=cd;
+  for(let k=0;k<n&&p+46<=buf.length;k++){
+    if(dv.getUint32(p,true)!==0x02014b50)break;
+    const nl=dv.getUint16(p+28,true), xl=dv.getUint16(p+30,true), cl=dv.getUint16(p+32,true);
+    ent.push({nombre:td.decode(buf.subarray(p+46,p+46+nl)),metodo:dv.getUint16(p+10,true),csz:dv.getUint32(p+20,true),loff:dv.getUint32(p+42,true)});
+    p+=46+nl+xl+cl;
+  }
+  // un .xlsx también es un zip por dentro: ese no se abre, se lee tal cual
+  if(ent.some(e=>e.nombre==='[Content_Types].xml'))return null;
+  const out=[];
+  for(const e of ent){
+    if(/\/$/.test(e.nombre)||/^__MACOSX\//.test(e.nombre)||!/\.(xlsx|xlsm|xls|csv|txt|pdf)$/i.test(e.nombre))continue;
+    if(dv.getUint32(e.loff,true)!==0x04034b50)continue;
+    const ini=e.loff+30+dv.getUint16(e.loff+26,true)+dv.getUint16(e.loff+28,true), datos=buf.subarray(ini,ini+e.csz);
+    let bytes=null;
+    if(e.metodo===0)bytes=datos.slice();
+    else if(e.metodo===8&&typeof DecompressionStream==='function'){
+      try{ bytes=new Uint8Array(await new Response(new Blob([datos]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer()); }catch(err){ bytes=null; }
+    }
+    if(!bytes&&typeof XLSX!=='undefined'){   // navegador sin descompresor: el del lector de Excel
+      try{ const c=XLSX.CFB.read(buf,{type:'array'}); const i=c.FullPaths.findIndex(x=>x.endsWith(e.nombre)); if(i>=0)bytes=new Uint8Array(c.FileIndex[i].content); }catch(err){}
+    }
+    if(bytes){ const f=new File([bytes],e.nombre.split('/').pop(),{lastModified:file.lastModified}); f.__zip=file.name; out.push(f); }
+  }
+  return out;
+}
+(function(){
+  const enc0=encolar, det0=detectar;
+  encolar=async function(files){
+    const lista=[];
+    for(const f of files){
+      let dentro=null; try{ dentro=await abrirZip(f); }catch(e){ dentro=null; }
+      if(dentro===null){ lista.push(f); continue; }
+      if(!dentro.length){ COLA.push({id:'f'+Date.now()+Math.random().toString(36).slice(2,6),nombre:f.name,tipo:'desconocido',
+        porque:'Es un .zip, pero no he podido sacar de dentro ninguna hoja de cálculo, CSV o PDF. Ábrelo en la app Archivos y echa aquí lo que hay dentro.'}); continue; }
+      lista.push(...dentro);
+    }
+    if(lista.length)return enc0(lista);
+    pintar();
+  };
+  detectar=async function(f){ const it=await det0(f); if(f&&f.__zip)it.nombre=f.name+', dentro de '+f.__zip; return it; };
 })();
 
 

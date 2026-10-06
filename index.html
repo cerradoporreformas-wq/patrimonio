@@ -610,7 +610,7 @@ nav::-webkit-scrollbar{display:none}
 <div class="topbar">
 <header>
   <div>
-    <div class="logo">Disfruta la Vida <small>· Patrimonio · v164 · <a href="./nueva.html" style="color:inherit">versión nueva</a></small></div>
+    <div class="logo">Disfruta la Vida <small>· Patrimonio · v165 · <a href="./nueva.html" style="color:inherit">versión nueva</a></small></div>
     <div style="font-size:10px;opacity:.5;margin-top:2px" id="hdr-date"></div>
   </div>
   <div class="hdr-right">
@@ -12396,7 +12396,7 @@ function xtbParse(buf){
 // Una misma compra puede venir partida en dos apuntes —los títulos enteros
 // por un lado y la fracción por otro—, así que se agrupan por número de
 // posición: 121 acciones + 0,6545 acciones son UNA compra de 121,6545.
-const XTB_OPRX=/(OPEN|CLOSE)\s+(BUY|SELL)\s+([\d.,]+)(?:\s*\/\s*([\d.,]+))?\s*@\s*([\d.,]+)/i;
+const XTB_OPRX=/(OPEN|CLOSE)\s+(BUY|SELL)\s+(?:[A-Za-z][A-Za-z0-9.\-]*\s+)?([\d.,]+)(?:\s*\/\s*([\d.,]+))?\s*@\s*([\d.,]+)/i;   // v165 · desde octubre de 2026 XTB mete el ticker: «OPEN BUY FMC.US 253/253.8851 @ 8.71»
 function xtbOperaciones(ops){
   const g={}, comis={};
   (ops||[]).forEach(o=>{
@@ -12540,10 +12540,32 @@ async function degiroStart(forzarElegir){
 function handleDegiroPortfolio(ev){
   const f=(ev.target.files||[])[0]; ev.target.value='';
   if(!f)return;
-  const r=new FileReader();
-  r.onload=e=>brokerFile(new Uint8Array(e.target.result),f.name,f.lastModified);
-  r.onerror=()=>toast('No se pudo abrir el archivo');
-  r.readAsArrayBuffer(f);
+  // v165 · XTB da un .zip con el Excel dentro. El lector de Excel lo abría en el
+  // ordenador pero no siempre en el iPad: ahora lo abre el propio navegador.
+  (async()=>{
+    let buf=new Uint8Array(await f.arrayBuffer());
+    try{ const dentro=await zipNativo(buf); if(dentro)buf=dentro; }catch(e){}
+    brokerFile(buf,f.name,f.lastModified);
+  })().catch(()=>toast('No se pudo abrir el archivo'));
+}
+async function zipNativo(buf){
+  if(!(buf[0]===0x50&&buf[1]===0x4B))return null;
+  let eocd=-1;
+  for(let i=buf.length-22;i>=Math.max(0,buf.length-65557);i--){ if(buf[i]===0x50&&buf[i+1]===0x4B&&buf[i+2]===0x05&&buf[i+3]===0x06){eocd=i;break;} }
+  if(eocd<0)return null;
+  const dv=new DataView(buf.buffer,buf.byteOffset,buf.byteLength), td=new TextDecoder();
+  const n=dv.getUint16(eocd+10,true); let p=dv.getUint32(eocd+16,true); const ent=[];
+  for(let k=0;k<n;k++){ if(dv.getUint32(p,true)!==0x02014b50)break;
+    const nl=dv.getUint16(p+28,true), xl=dv.getUint16(p+30,true), cl=dv.getUint16(p+32,true);
+    ent.push({nombre:td.decode(buf.subarray(p+46,p+46+nl)),metodo:dv.getUint16(p+10,true),csz:dv.getUint32(p+20,true),loff:dv.getUint32(p+42,true)});
+    p+=46+nl+xl+cl; }
+  if(ent.some(e=>e.nombre==='[Content_Types].xml'))return null;
+  const e=ent.find(x=>/\.(xlsx|xlsm|xls|csv)$/i.test(x.nombre)&&!/^__MACOSX\//.test(x.nombre)); if(!e)return null;
+  const ini=e.loff+30+dv.getUint16(e.loff+26,true)+dv.getUint16(e.loff+28,true), datos=buf.subarray(ini,ini+e.csz);
+  if(e.metodo===0)return datos.slice();
+  if(e.metodo===8&&typeof DecompressionStream==='function')
+    return new Uint8Array(await new Response(new Blob([datos]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer());
+  return null;
 }
 // v142 · El bróker se reconoce por los primeros bytes, no por la extensión:
 // un .xlsx y el .zip de XTB empiezan igual ("PK"), y el CSV de DEGIRO es
