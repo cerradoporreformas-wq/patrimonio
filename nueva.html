@@ -15394,6 +15394,231 @@ __LEG.P.accionesLista=function(){ return (cfg.stocks||[]).map(s=>({id:s.id,name:
 
 </script>
 <script>
+// ════════════════════════════════════════════════════════════════════
+// v166 · ALMACÉN SIN TOPE: los datos pasan de localStorage a IndexedDB
+// ════════════════════════════════════════════════════════════════════
+// Safari solo deja 5 MB por web en localStorage. Con tus datos, la copia para
+// deshacer y lo que crecen cada mes, ya no cabía, y tarde o temprano no iba a
+// caber ni siquiera lo tuyo. IndexedDB es el otro almacén del navegador y no
+// tiene ese tope: en el iPad, cada web puede usar hasta un 60 % del disco.
+//
+// Las dos apps leen y escriben exactamente igual que antes, al instante, sobre
+// una copia en memoria: ALM se usa como localStorage. Cada cambio se escribe en
+// IndexedDB justo después, y si hay otra pestaña de la app abierta se le pasa,
+// para que no siga trabajando con datos viejos.
+//
+// La mudanza se hace sola la primera vez: se copian los datos, se leen de
+// vuelta para comprobar que han llegado enteros y solo entonces se borran de
+// localStorage. Allí queda una marca pequeña que dice dónde están ahora.
+// Si IndexedDB no funciona y nunca se ha mudado nada, se sigue con
+// localStorage como siempre. Si los datos ya están en IndexedDB y no se pueden
+// leer, no se arranca vacía: se avisa y no se toca nada.
+const ALM=(function(){
+  'use strict';
+  const BD='disfruta-la-vida', TABLA='claves', MARCA='dlv_almacen';
+  const LS=window.localStorage;
+  const nuestra=k=>/^dlv_|^dlv2_/.test(k)&&k!==MARCA;
+  const mem=new Map();
+  let db=null, modo='ls', motivo='', persistente=null;
+  let cola=new Map(), programado=false, cadena=Promise.resolve(), avisado=false, reintento=null;
+  let canal=null;
+  try{ canal=new BroadcastChannel('dlv-almacen'); }catch(e){ canal=null; }
+
+  function abrir(){
+    return new Promise((ok,ko)=>{
+      let r;
+      try{ r=indexedDB.open(BD,1); }catch(e){ ko(e); return; }
+      r.onupgradeneeded=()=>{ const d=r.result; if(!d.objectStoreNames.contains(TABLA))d.createObjectStore(TABLA); };
+      r.onsuccess=()=>{
+        const d=r.result;
+        d.onversionchange=()=>{ try{d.close();}catch(e){} if(db===d)db=null; };
+        d.onclose=()=>{ if(db===d)db=null; };
+        ok(d);
+      };
+      r.onerror=()=>ko(r.error||new Error('IndexedDB no se abre'));
+      r.onblocked=()=>ko(new Error('IndexedDB está bloqueado por otra pestaña'));
+    });
+  }
+  function leerTodo(d){
+    return new Promise((ok,ko)=>{
+      const out=new Map();
+      let t;
+      try{ t=d.transaction(TABLA,'readonly'); }catch(e){ ko(e); return; }
+      const c=t.objectStore(TABLA).openCursor();
+      c.onsuccess=()=>{ const x=c.result; if(x){ out.set(String(x.key),x.value); x.continue(); } };
+      t.oncomplete=()=>ok(out);
+      t.onerror=t.onabort=()=>ko(t.error||new Error('No se ha podido leer IndexedDB'));
+    });
+  }
+  function escribir(d,pares,vaciar){
+    return new Promise((ok,ko)=>{
+      let t;
+      try{ t=d.transaction(TABLA,'readwrite'); }catch(e){ ko(e); return; }
+      const s=t.objectStore(TABLA);
+      if(vaciar)s.clear();
+      pares.forEach(([k,v])=>{ if(v==null)s.delete(k); else s.put(v,k); });
+      t.oncomplete=()=>ok();
+      t.onerror=t.onabort=()=>ko(t.error||new Error('No se ha podido escribir en IndexedDB'));
+    });
+  }
+  function clavesLS(){
+    const o=[];
+    for(let i=0;i<LS.length;i++){ const k=LS.key(i); if(k!=null&&nuestra(k))o.push(k); }
+    return o;
+  }
+  // La marca va en localStorage, que está lleno: si no cabe, se suelta antes lo
+  // más gordo, que para entonces ya está a salvo en IndexedDB.
+  function marcar(){
+    const v=JSON.stringify({en:'IndexedDB',desde:new Date().toISOString()});
+    try{ LS.setItem(MARCA,v); return true; }
+    catch(e){
+      ['dlv2_undo','dlv2_db','dlv_undo'].forEach(k=>{ try{LS.removeItem(k);}catch(_){} });
+      try{ LS.setItem(MARCA,v); return true; }catch(e2){ return false; }
+    }
+  }
+  async function iniciar(){
+    if(!window.indexedDB){ motivo='este navegador no tiene IndexedDB'; return; }
+    const yaMudado=!!LS.getItem(MARCA);
+    let d, guardado;
+    try{ d=await abrir(); guardado=await leerTodo(d); }
+    catch(e){
+      motivo=String(e&&e.message||e);
+      if(yaMudado)modo='roto';     // tus datos están allí y ahora no se pueden leer: no se arranca vacía
+      return;
+    }
+    try{
+      const enLS=clavesLS();
+      // Antes de la marca, manda localStorage. Con la marca puesta, manda
+      // IndexedDB, salvo que esté vacío y en localStorage haya datos.
+      if(!yaMudado||(!guardado.size&&enLS.includes('dlv_cfg'))){
+        if(enLS.length){
+          const pares=enLS.map(k=>[k,LS.getItem(k)]);
+          await escribir(d,pares,true);
+          const vuelta=await leerTodo(d);
+          const enteros=vuelta.size===pares.length&&pares.every(([k,v])=>vuelta.get(k)===v);
+          if(!enteros)throw new Error('la copia en IndexedDB no ha llegado entera');
+          guardado=vuelta;
+          if(!marcar())throw new Error('no se ha podido dejar la marca de la mudanza');
+          enLS.forEach(k=>{ try{LS.removeItem(k);}catch(e){} });
+        }else if(!marcar())throw new Error('no se ha podido dejar la marca de la mudanza');
+      }
+    }catch(e){
+      motivo=String(e&&e.message||e);
+      try{ d.close(); }catch(_){}
+      if(LS.getItem(MARCA))modo='roto';
+      return;     // sin marca, todo sigue en localStorage, como antes
+    }
+    guardado.forEach((v,k)=>mem.set(k,v));
+    db=d; modo='idb';
+    // Que el iPad no lo borre si se queda sin espacio. Safari decide solo,
+    // y suele concederlo a las apps de la pantalla de inicio.
+    try{
+      if(navigator.storage&&navigator.storage.persist){
+        navigator.storage.persisted()
+          .then(p=>p||navigator.storage.persist())
+          .then(p=>{persistente=!!p;},()=>{});
+      }
+    }catch(e){}
+  }
+
+  function avisar(e){
+    if(avisado)return;
+    avisado=true;
+    setTimeout(()=>alert('No se están guardando los cambios en este navegador ('+(e&&e.message||e)+').\n\n'+
+      'Guarda ahora una copia en archivo y vuelve a abrir la app.'),50);
+  }
+  function programar(){
+    if(programado)return;
+    programado=true;
+    Promise.resolve().then(volcar);
+  }
+  function volcar(){
+    programado=false;
+    if(!cola.size)return;
+    const lote=[...cola.entries()];
+    cola=new Map();
+    cadena=cadena.then(async()=>{
+      try{
+        if(!db)db=await abrir();
+        await escribir(db,lote,false);
+      }catch(e){
+        try{ db=await abrir(); await escribir(db,lote,false); }
+        catch(e2){
+          // se reintenta; si mientras tanto has cambiado esa clave, manda lo nuevo
+          lote.forEach(([k,v])=>{ if(!cola.has(k))cola.set(k,v); });
+          avisar(e2);
+          clearTimeout(reintento); reintento=setTimeout(programar,5000);
+          return;
+        }
+      }
+      avisado=false;
+      if(canal)try{ canal.postMessage(lote); }catch(e){}
+    });
+  }
+  // Lo que escribe otra pestaña de la app llega aquí
+  if(canal)canal.onmessage=ev=>{
+    const lote=ev.data;
+    if(modo!=='idb'||!Array.isArray(lote))return;
+    lote.forEach(([k,v])=>{
+      if(cola.has(k))return;       // lo tuyo pendiente de escribir manda
+      if(v==null)mem.delete(k); else mem.set(k,v);
+    });
+  };
+  // Al irse la app a segundo plano, que no quede nada a medias
+  document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='hidden'&&cola.size)volcar(); });
+
+  function claves(){
+    if(modo==='idb')return [...mem.keys()];
+    const o=[];
+    for(let i=0;i<LS.length;i++){ const k=LS.key(i); if(k!==MARCA)o.push(k); }
+    return o;
+  }
+  const listo=iniciar().catch(e=>{ motivo=String(e&&e.message||e); });
+  return {
+    getItem(k){
+      k=String(k);
+      if(modo==='idb'&&nuestra(k))return mem.has(k)?mem.get(k):null;
+      return LS.getItem(k);
+    },
+    setItem(k,v){
+      k=String(k); v=String(v);
+      if(modo==='idb'&&nuestra(k)){ mem.set(k,v); cola.set(k,v); programar(); return; }
+      if(modo==='roto')throw new Error('Tus datos no se pueden abrir ahora');
+      LS.setItem(k,v);
+    },
+    removeItem(k){
+      k=String(k);
+      if(modo==='idb'&&nuestra(k)){ mem.delete(k); cola.set(k,null); programar(); return; }
+      if(modo==='roto')return;
+      LS.removeItem(k);
+    },
+    key(i){ const c=claves(); return i>=0&&i<c.length?c[i]:null; },
+    get length(){ return claves().length; },
+    get listo(){ return listo; },
+    get modo(){ return modo; },          // 'idb', 'ls' o 'roto'
+    get motivo(){ return motivo; },
+    get persistente(){ return persistente; },
+    // caracteres guardados, para el panel de revisión
+    tamano(){ let t=0; claves().forEach(k=>{ const v=this.getItem(k); t+=k.length+(v?v.length:0); }); return t; },
+    // se resuelve cuando todo lo escrito hasta ahora está ya en IndexedDB
+    escrito(){ if(cola.size)volcar(); return cadena; }
+  };
+})();
+// Si los datos ya están en IndexedDB y no se pueden leer, se dice y no se arranca
+function almacenRoto(){
+  const d=document.createElement('div');
+  d.setAttribute('role','alert');
+  d.style.cssText='position:fixed;inset:0;z-index:99999;background:#fff;color:#1a2433;padding:28px 22px;'+
+    'font:16px/1.55 -apple-system,system-ui,sans-serif;overflow:auto';
+  d.innerHTML='<h2 style="font-size:20px;margin:0 0 12px">No se pueden abrir tus datos ahora mismo</h2>'+
+    '<p>Están guardados en este iPad, pero el navegador no deja leerlos en este momento. No se ha borrado nada.</p>'+
+    '<p>Cierra la app del todo (desde el selector de apps, deslizándola hacia arriba) y vuelve a abrirla. '+
+    'Si sigue igual, reinicia el iPad.</p>'+
+    '<p style="color:#5a6575;font-size:13px">Detalle: '+String(ALM.motivo||'').replace(/[<>&]/g,'')+'</p>';
+  document.body.appendChild(d);
+}
+</script>
+<script>
 
 // ════════════════════════════════════════════════════════════════════
 // DISFRUTA LA VIDA · v2 · MOTOR
@@ -15669,9 +15894,9 @@ const MESES=['enero','febrero','marzo','abril','mayo','junio','julio','agosto','
 const mesLargo=ym=>MESES[+ym.slice(5,7)-1]+' de '+ym.slice(0,4);
 
 // ─── Guardado ──────────────────────────────────────────────────────
-function cargar(){ try{const r=localStorage.getItem(V2_KEY);DB=r?JSON.parse(r):null;}catch(e){DB=null;} }
+function cargar(){ try{const r=ALM.getItem(V2_KEY);DB=r?JSON.parse(r):null;}catch(e){DB=null;} }
 function guardar(){
-  try{ localStorage.setItem(V2_KEY,JSON.stringify(DB)); return true; }
+  try{ ALM.setItem(V2_KEY,JSON.stringify(DB)); return true; }
   catch(e){ alert('No se ha podido guardar: el almacenamiento del navegador está lleno.'); return false; }
 }
 
@@ -15813,7 +16038,7 @@ function grafico(S){
 
 // ─── Buzón y ajustes ───────────────────────────────────────────────
 function bloqueTraer(){
-  const hayApp=!!localStorage.getItem('dlv_cfg');
+  const hayApp=!!ALM.getItem('dlv_cfg');
   return '<div class="bloque"><h3>Traer tus datos</h3>'+
     '<p class="pie">'+(hayApp
       ?'La app de siempre tiene datos en este navegador. Traerlos no cambia nada en ella: solo los lee.'
@@ -15997,7 +16222,7 @@ async function aplicarUno(it){
   }catch(e){ pintar(); aviso('No se ha aplicado nada: '+esc(e.message||e),false); }
 }
 function enlazarBuzon(){
-  const t=$('#b-traer'); if(t)t.onclick=()=>traerDe(leerAppActual(localStorage),'app actual');
+  const t=$('#b-traer'); if(t)t.onclick=()=>traerDe(leerAppActual(ALM),'app actual');
   const f=$('#f-copia'); if(f)f.onchange=ev=>{
     const file=ev.target.files[0]; ev.target.value=''; if(!file)return;
     const r=new FileReader();
@@ -16052,7 +16277,7 @@ function enlazarBuzon(){
   };
   const b=$('#b-borrar'); if(b)b.onclick=()=>{
     if(!confirm('¿Borrar los datos de esta versión? La app de siempre no se toca.'))return;
-    localStorage.removeItem(V2_KEY); DB=null; ir('buzon');
+    ALM.removeItem(V2_KEY); DB=null; ir('buzon');
   };
 }
 
@@ -16062,12 +16287,16 @@ function enlazarBuzon(){
 // vez que se abre se recalcula a partir de ella. Así da igual en cuál de las
 // dos hayas importado algo: siempre enseñan lo mismo.
 function arrancar(){
-  const old=leerAppActual(localStorage);
+  const old=leerAppActual(ALM);
   if(old){ DB=migrar(old,'app actual'); guardar(); }
   else cargar();
   nav(); pintar();
 }
-document.addEventListener('DOMContentLoaded',arrancar);
+// v166 · Se arranca cuando el almacén está listo: la primera vez, después de
+// mudar tus datos a IndexedDB.
+document.addEventListener('DOMContentLoaded',()=>{
+  ALM.listo.then(()=>{ if(ALM.modo==='roto'){ almacenRoto(); return; } arrancar(); });
+});
 
 
 // Una cita al principio de una pantalla
@@ -16096,10 +16325,10 @@ const LEG={fn:null,modo:'real',scratch:{},cap:null,respConfirm:true,respPrompt:(
 // ─── El entorno cerrado del motor viejo ────────────────────────────
 function legLS(){
   return {
-    getItem:k=>(LEG.modo==='sim'&&Object.prototype.hasOwnProperty.call(LEG.scratch,k))?LEG.scratch[k]:localStorage.getItem(k),
-    setItem:(k,v)=>{ if(LEG.modo==='sim')LEG.scratch[k]=String(v); else localStorage.setItem(k,v); },
-    removeItem:k=>{ if(LEG.modo==='sim')LEG.scratch[k]=null; else localStorage.removeItem(k); },
-    key:i=>localStorage.key(i), get length(){return localStorage.length;}
+    getItem:k=>(LEG.modo==='sim'&&Object.prototype.hasOwnProperty.call(LEG.scratch,k))?LEG.scratch[k]:ALM.getItem(k),
+    setItem:(k,v)=>{ if(LEG.modo==='sim')LEG.scratch[k]=String(v); else ALM.setItem(k,v); },
+    removeItem:k=>{ if(LEG.modo==='sim')LEG.scratch[k]=null; else ALM.removeItem(k); },
+    key:i=>ALM.key(i), get length(){return ALM.length;}
   };
 }
 function falsoDoc(){
@@ -16282,18 +16511,31 @@ async function simular(it){
 }
 
 // ─── Aplicar: de verdad, con copia para deshacer ───────────────────
+// v166 · En la copia van solo tus datos de la app de siempre. Fuera su propia
+// copia de deshacer (dlv_undo), que deja de valer en cuanto se cambia algo aquí,
+// y lo de esta versión (dlv2_*), que se recalcula sola a partir de lo demás.
+// Antes iban las tres cosas y la copia ocupaba el doble de lo necesario.
+const enCopia=k=>/^dlv_/.test(k)&&k!=='dlv_undo'&&k!=='dlv_almacen';
 function fotoCruda(){
   const o={};
-  for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i); if(/^dlv_|^dlv2_db$/.test(k))o[k]=localStorage.getItem(k);}
+  for(let i=0;i<ALM.length;i++){const k=ALM.key(i); if(enCopia(k))o[k]=ALM.getItem(k);}
   return o;
 }
 // La copia para deshacer se toma una vez por cambio: si aplicas varios archivos
 // de golpe, «Deshacer» los quita todos juntos, que es lo que se espera.
 function guardarCopiaDeshacer(que){
   const cruda=fotoCruda();
-  try{ localStorage.setItem(UNDO_KEY,JSON.stringify({cuando:new Date().toISOString(),que,datos:cruda})); return cruda; }
-  catch(e){ return confirm('No hay sitio para guardar la copia que permite deshacer. ¿Importar igualmente, sin poder deshacer?')?cruda:null; }
+  try{ ALM.setItem(UNDO_KEY,JSON.stringify({cuando:new Date().toISOString(),que,datos:cruda})); return cruda; }
+  catch(e){
+    if(!confirm('No cabe en el navegador la copia que permite deshacer. Si sigues, el cambio se hace igual, pero no se podrá deshacer. ¿Seguir?'))return null;
+    // la copia anterior ya no vale: deshacerla se llevaría también este cambio
+    try{ ALM.removeItem(UNDO_KEY); }catch(_){}
+    return cruda;
+  }
 }
+// La copia de deshacer de la app de siempre se queda vieja con cualquier cambio
+// hecho aquí: si la usaras después, se llevaría también este. Fuera.
+function olvidarDeshacerViejo(){ try{ ALM.removeItem('dlv_undo'); }catch(e){} }
 async function aplicar(it,enLote){
   legado();
   const cruda=enLote?fotoCruda():guardarCopiaDeshacer(describir(it));
@@ -16304,20 +16546,26 @@ async function aplicar(it,enLote){
   try{ await ejecutar(it); }
   catch(e){ restaurar(cruda); throw e; }
   recargarLegado();
+  olvidarDeshacerViejo();
   // la versión nueva se recalcula a partir de lo que ha quedado
-  DB=migrar(leerAppActual(localStorage),'app actual'); guardar();
+  DB=migrar(leerAppActual(ALM),'app actual'); guardar();
   return true;
 }
+// v166 · Volver a una copia toca solo tus datos de la app de siempre; lo de esta
+// versión se recalcula a partir de ellos. Vale también para las copias de antes,
+// que llevaban además dlv2_db y la copia de deshacer de la app de siempre.
 function restaurar(cruda){
-  Object.keys(cruda).forEach(k=>localStorage.setItem(k,cruda[k]));
-  for(let i=localStorage.length-1;i>=0;i--){const k=localStorage.key(i); if(/^dlv_|^dlv2_db$/.test(k)&&!(k in cruda))localStorage.removeItem(k);}
+  Object.keys(cruda).forEach(k=>{ if(enCopia(k))ALM.setItem(k,cruda[k]); });
+  for(let i=ALM.length-1;i>=0;i--){const k=ALM.key(i); if(enCopia(k)&&!(k in cruda))ALM.removeItem(k);}
   if(LEG.fn)recargarLegado();
-  cargar();
+  const old=leerAppActual(ALM);
+  if(old){ DB=migrar(old,'app actual'); guardar(); }
+  else cargar();
 }
-function ultimoCambio(){ try{return JSON.parse(localStorage.getItem(UNDO_KEY)||'null');}catch(e){return null;} }
+function ultimoCambio(){ try{return JSON.parse(ALM.getItem(UNDO_KEY)||'null');}catch(e){return null;} }
 function deshacer(){
   const u=ultimoCambio(); if(!u)return false;
-  restaurar(u.datos); localStorage.removeItem(UNDO_KEY); return true;
+  restaurar(u.datos); ALM.removeItem(UNDO_KEY); return true;
 }
 function describir(it){
   return ({banco:'Extracto del banco',banco_tr:'Extracto de Trade Republic',cartera:'Cartera de '+(it.broker||'bróker'),
@@ -16369,7 +16617,7 @@ function Q(clave,fn){
 (function(){
   const orig=recargarLegado;
   recargarLegado=function(){
-    if(!localStorage.getItem('dlv_cfg')){ LEG.fn=null; LEG.P=null; LEG.modo='real'; LEG.scratch={}; legado(); }
+    if(!ALM.getItem('dlv_cfg')){ LEG.fn=null; LEG.P=null; LEG.modo='real'; LEG.scratch={}; legado(); }
     else orig();
     LEG.listo=false; olvidar();
   };
@@ -16382,14 +16630,14 @@ function Q(clave,fn){
 function cambiar(que,fn,op){
   op=op||{};
   puente();
-  const undoPrev=localStorage.getItem(UNDO_KEY);
+  const undoPrev=ALM.getItem(UNDO_KEY);
   const cruda=guardarCopiaDeshacer(que); if(!cruda)return false;
   const cola=(op.respuestas||[]).slice();
   LEG.cap={alerts:[],confirms:[],prompts:[]}; LEG.toasts=[];
   LEG.respConfirm=op.confirmar===false?false:true;
   LEG.respPrompt=(s,d)=>cola.length?cola.shift():(op.porDefecto?d:null);
   LEG.modo='real';
-  const deshacerIntento=()=>{ restaurar(cruda); try{ if(undoPrev!=null)localStorage.setItem(UNDO_KEY,undoPrev); else localStorage.removeItem(UNDO_KEY);}catch(e){} };
+  const deshacerIntento=()=>{ restaurar(cruda); try{ if(undoPrev!=null)ALM.setItem(UNDO_KEY,undoPrev); else ALM.removeItem(UNDO_KEY);}catch(e){} };
   try{
     fn(FD);
     // el motor avisa con toast de lo que falta: entonces no ha hecho nada
@@ -16401,7 +16649,8 @@ function cambiar(que,fn,op){
   LEG.respConfirm=responder;
   const avisos=LEG.cap.alerts.slice();
   recargarLegado();
-  DB=migrar(leerAppActual(localStorage),'app actual'); guardar();
+  olvidarDeshacerViejo();
+  DB=migrar(leerAppActual(ALM),'app actual'); guardar();
   pintar();
   aviso2(op.hecho||(que.charAt(0).toUpperCase()+que.slice(1)+'. Lo puedes deshacer en el Buzón.'),true);
   if(avisos.length&&op.verAvisos)setTimeout(()=>alert(avisos.join('\n\n')),50);
@@ -17619,7 +17868,7 @@ function enlazarExtrasBuzon(){
     const nombre='patrimonio_datos_'+d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+'_'+p(d.getHours())+p(d.getMinutes())+'_'+(P.aparato()||'')+'.json';
     const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([txt],{type:'application/json'})); a.download=nombre;
     document.body.appendChild(a); a.click(); setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},800);
-    try{localStorage.setItem('dlv_lastexport',new Date().toISOString());}catch(e){}
+    try{ALM.setItem('dlv_lastexport',new Date().toISOString());}catch(e){}
     olvidar(); aviso2('Copia guardada: '+nombre,true);
   };
 }
@@ -17662,7 +17911,7 @@ function apuntar(){
 }
 // Restaurar una copia de la app de siempre: en las dos apps, con deshacer
 function restaurarCopia(json){
-  const lc=localStorage.getItem('dlv_lastchange'), fe=json._exported||null;
+  const lc=ALM.getItem('dlv_lastchange'), fe=json._exported||null;
   const vieja=lc&&fe&&fe<lc;
   if(!confirm('Esto sustituye todos tus datos, en las dos apps, por los de la copia'+(fe?' del '+fecha(fe):'')+'.'+
     (vieja?'\n\nOjo: la copia es más antigua que tus últimos cambios en este aparato. Si sigues, los pierdes.':'')+'\n\nSe puede deshacer. ¿Seguir?'))return;
@@ -17759,8 +18008,8 @@ function gNativo(rows){
   return d&&h.findIndex(c=>/descrip|concepto|description/.test(c))>=0;
 }
 function gFirma(cab){ return (cab||[]).map(c=>gTxt(c).toLowerCase()).join('|').slice(0,300); }
-function gMapaGuardado(firma){ try{ return (JSON.parse(localStorage.getItem('dlv2_mapas')||'{}'))[firma]||null; }catch(e){ return null; } }
-function gGuardaMapa(firma,m){ try{ const o=JSON.parse(localStorage.getItem('dlv2_mapas')||'{}'); o[firma]=m; localStorage.setItem('dlv2_mapas',JSON.stringify(o)); }catch(e){} }
+function gMapaGuardado(firma){ try{ return (JSON.parse(ALM.getItem('dlv2_mapas')||'{}'))[firma]||null; }catch(e){ return null; } }
+function gGuardaMapa(firma,m){ try{ const o=JSON.parse(ALM.getItem('dlv2_mapas')||'{}'); o[firma]=m; ALM.setItem('dlv2_mapas',JSON.stringify(o)); }catch(e){} }
 // Filas de datos ya interpretadas
 function gFilas(rows,m){
   const out=[];

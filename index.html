@@ -610,7 +610,7 @@ nav::-webkit-scrollbar{display:none}
 <div class="topbar">
 <header>
   <div>
-    <div class="logo">Disfruta la Vida <small>· Patrimonio · v165 · <a href="./nueva.html" style="color:inherit">versión nueva</a></small></div>
+    <div class="logo">Disfruta la Vida <small>· Patrimonio · v166 · <a href="./nueva.html" style="color:inherit">versión nueva</a></small></div>
     <div style="font-size:10px;opacity:.5;margin-top:2px" id="hdr-date"></div>
   </div>
   <div class="hdr-right">
@@ -1860,6 +1860,231 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
 
 </script>
 <script>
+// ════════════════════════════════════════════════════════════════════
+// v166 · ALMACÉN SIN TOPE: los datos pasan de localStorage a IndexedDB
+// ════════════════════════════════════════════════════════════════════
+// Safari solo deja 5 MB por web en localStorage. Con tus datos, la copia para
+// deshacer y lo que crecen cada mes, ya no cabía, y tarde o temprano no iba a
+// caber ni siquiera lo tuyo. IndexedDB es el otro almacén del navegador y no
+// tiene ese tope: en el iPad, cada web puede usar hasta un 60 % del disco.
+//
+// Las dos apps leen y escriben exactamente igual que antes, al instante, sobre
+// una copia en memoria: ALM se usa como localStorage. Cada cambio se escribe en
+// IndexedDB justo después, y si hay otra pestaña de la app abierta se le pasa,
+// para que no siga trabajando con datos viejos.
+//
+// La mudanza se hace sola la primera vez: se copian los datos, se leen de
+// vuelta para comprobar que han llegado enteros y solo entonces se borran de
+// localStorage. Allí queda una marca pequeña que dice dónde están ahora.
+// Si IndexedDB no funciona y nunca se ha mudado nada, se sigue con
+// localStorage como siempre. Si los datos ya están en IndexedDB y no se pueden
+// leer, no se arranca vacía: se avisa y no se toca nada.
+const ALM=(function(){
+  'use strict';
+  const BD='disfruta-la-vida', TABLA='claves', MARCA='dlv_almacen';
+  const LS=window.localStorage;
+  const nuestra=k=>/^dlv_|^dlv2_/.test(k)&&k!==MARCA;
+  const mem=new Map();
+  let db=null, modo='ls', motivo='', persistente=null;
+  let cola=new Map(), programado=false, cadena=Promise.resolve(), avisado=false, reintento=null;
+  let canal=null;
+  try{ canal=new BroadcastChannel('dlv-almacen'); }catch(e){ canal=null; }
+
+  function abrir(){
+    return new Promise((ok,ko)=>{
+      let r;
+      try{ r=indexedDB.open(BD,1); }catch(e){ ko(e); return; }
+      r.onupgradeneeded=()=>{ const d=r.result; if(!d.objectStoreNames.contains(TABLA))d.createObjectStore(TABLA); };
+      r.onsuccess=()=>{
+        const d=r.result;
+        d.onversionchange=()=>{ try{d.close();}catch(e){} if(db===d)db=null; };
+        d.onclose=()=>{ if(db===d)db=null; };
+        ok(d);
+      };
+      r.onerror=()=>ko(r.error||new Error('IndexedDB no se abre'));
+      r.onblocked=()=>ko(new Error('IndexedDB está bloqueado por otra pestaña'));
+    });
+  }
+  function leerTodo(d){
+    return new Promise((ok,ko)=>{
+      const out=new Map();
+      let t;
+      try{ t=d.transaction(TABLA,'readonly'); }catch(e){ ko(e); return; }
+      const c=t.objectStore(TABLA).openCursor();
+      c.onsuccess=()=>{ const x=c.result; if(x){ out.set(String(x.key),x.value); x.continue(); } };
+      t.oncomplete=()=>ok(out);
+      t.onerror=t.onabort=()=>ko(t.error||new Error('No se ha podido leer IndexedDB'));
+    });
+  }
+  function escribir(d,pares,vaciar){
+    return new Promise((ok,ko)=>{
+      let t;
+      try{ t=d.transaction(TABLA,'readwrite'); }catch(e){ ko(e); return; }
+      const s=t.objectStore(TABLA);
+      if(vaciar)s.clear();
+      pares.forEach(([k,v])=>{ if(v==null)s.delete(k); else s.put(v,k); });
+      t.oncomplete=()=>ok();
+      t.onerror=t.onabort=()=>ko(t.error||new Error('No se ha podido escribir en IndexedDB'));
+    });
+  }
+  function clavesLS(){
+    const o=[];
+    for(let i=0;i<LS.length;i++){ const k=LS.key(i); if(k!=null&&nuestra(k))o.push(k); }
+    return o;
+  }
+  // La marca va en localStorage, que está lleno: si no cabe, se suelta antes lo
+  // más gordo, que para entonces ya está a salvo en IndexedDB.
+  function marcar(){
+    const v=JSON.stringify({en:'IndexedDB',desde:new Date().toISOString()});
+    try{ LS.setItem(MARCA,v); return true; }
+    catch(e){
+      ['dlv2_undo','dlv2_db','dlv_undo'].forEach(k=>{ try{LS.removeItem(k);}catch(_){} });
+      try{ LS.setItem(MARCA,v); return true; }catch(e2){ return false; }
+    }
+  }
+  async function iniciar(){
+    if(!window.indexedDB){ motivo='este navegador no tiene IndexedDB'; return; }
+    const yaMudado=!!LS.getItem(MARCA);
+    let d, guardado;
+    try{ d=await abrir(); guardado=await leerTodo(d); }
+    catch(e){
+      motivo=String(e&&e.message||e);
+      if(yaMudado)modo='roto';     // tus datos están allí y ahora no se pueden leer: no se arranca vacía
+      return;
+    }
+    try{
+      const enLS=clavesLS();
+      // Antes de la marca, manda localStorage. Con la marca puesta, manda
+      // IndexedDB, salvo que esté vacío y en localStorage haya datos.
+      if(!yaMudado||(!guardado.size&&enLS.includes('dlv_cfg'))){
+        if(enLS.length){
+          const pares=enLS.map(k=>[k,LS.getItem(k)]);
+          await escribir(d,pares,true);
+          const vuelta=await leerTodo(d);
+          const enteros=vuelta.size===pares.length&&pares.every(([k,v])=>vuelta.get(k)===v);
+          if(!enteros)throw new Error('la copia en IndexedDB no ha llegado entera');
+          guardado=vuelta;
+          if(!marcar())throw new Error('no se ha podido dejar la marca de la mudanza');
+          enLS.forEach(k=>{ try{LS.removeItem(k);}catch(e){} });
+        }else if(!marcar())throw new Error('no se ha podido dejar la marca de la mudanza');
+      }
+    }catch(e){
+      motivo=String(e&&e.message||e);
+      try{ d.close(); }catch(_){}
+      if(LS.getItem(MARCA))modo='roto';
+      return;     // sin marca, todo sigue en localStorage, como antes
+    }
+    guardado.forEach((v,k)=>mem.set(k,v));
+    db=d; modo='idb';
+    // Que el iPad no lo borre si se queda sin espacio. Safari decide solo,
+    // y suele concederlo a las apps de la pantalla de inicio.
+    try{
+      if(navigator.storage&&navigator.storage.persist){
+        navigator.storage.persisted()
+          .then(p=>p||navigator.storage.persist())
+          .then(p=>{persistente=!!p;},()=>{});
+      }
+    }catch(e){}
+  }
+
+  function avisar(e){
+    if(avisado)return;
+    avisado=true;
+    setTimeout(()=>alert('No se están guardando los cambios en este navegador ('+(e&&e.message||e)+').\n\n'+
+      'Guarda ahora una copia en archivo y vuelve a abrir la app.'),50);
+  }
+  function programar(){
+    if(programado)return;
+    programado=true;
+    Promise.resolve().then(volcar);
+  }
+  function volcar(){
+    programado=false;
+    if(!cola.size)return;
+    const lote=[...cola.entries()];
+    cola=new Map();
+    cadena=cadena.then(async()=>{
+      try{
+        if(!db)db=await abrir();
+        await escribir(db,lote,false);
+      }catch(e){
+        try{ db=await abrir(); await escribir(db,lote,false); }
+        catch(e2){
+          // se reintenta; si mientras tanto has cambiado esa clave, manda lo nuevo
+          lote.forEach(([k,v])=>{ if(!cola.has(k))cola.set(k,v); });
+          avisar(e2);
+          clearTimeout(reintento); reintento=setTimeout(programar,5000);
+          return;
+        }
+      }
+      avisado=false;
+      if(canal)try{ canal.postMessage(lote); }catch(e){}
+    });
+  }
+  // Lo que escribe otra pestaña de la app llega aquí
+  if(canal)canal.onmessage=ev=>{
+    const lote=ev.data;
+    if(modo!=='idb'||!Array.isArray(lote))return;
+    lote.forEach(([k,v])=>{
+      if(cola.has(k))return;       // lo tuyo pendiente de escribir manda
+      if(v==null)mem.delete(k); else mem.set(k,v);
+    });
+  };
+  // Al irse la app a segundo plano, que no quede nada a medias
+  document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='hidden'&&cola.size)volcar(); });
+
+  function claves(){
+    if(modo==='idb')return [...mem.keys()];
+    const o=[];
+    for(let i=0;i<LS.length;i++){ const k=LS.key(i); if(k!==MARCA)o.push(k); }
+    return o;
+  }
+  const listo=iniciar().catch(e=>{ motivo=String(e&&e.message||e); });
+  return {
+    getItem(k){
+      k=String(k);
+      if(modo==='idb'&&nuestra(k))return mem.has(k)?mem.get(k):null;
+      return LS.getItem(k);
+    },
+    setItem(k,v){
+      k=String(k); v=String(v);
+      if(modo==='idb'&&nuestra(k)){ mem.set(k,v); cola.set(k,v); programar(); return; }
+      if(modo==='roto')throw new Error('Tus datos no se pueden abrir ahora');
+      LS.setItem(k,v);
+    },
+    removeItem(k){
+      k=String(k);
+      if(modo==='idb'&&nuestra(k)){ mem.delete(k); cola.set(k,null); programar(); return; }
+      if(modo==='roto')return;
+      LS.removeItem(k);
+    },
+    key(i){ const c=claves(); return i>=0&&i<c.length?c[i]:null; },
+    get length(){ return claves().length; },
+    get listo(){ return listo; },
+    get modo(){ return modo; },          // 'idb', 'ls' o 'roto'
+    get motivo(){ return motivo; },
+    get persistente(){ return persistente; },
+    // caracteres guardados, para el panel de revisión
+    tamano(){ let t=0; claves().forEach(k=>{ const v=this.getItem(k); t+=k.length+(v?v.length:0); }); return t; },
+    // se resuelve cuando todo lo escrito hasta ahora está ya en IndexedDB
+    escrito(){ if(cola.size)volcar(); return cadena; }
+  };
+})();
+// Si los datos ya están en IndexedDB y no se pueden leer, se dice y no se arranca
+function almacenRoto(){
+  const d=document.createElement('div');
+  d.setAttribute('role','alert');
+  d.style.cssText='position:fixed;inset:0;z-index:99999;background:#fff;color:#1a2433;padding:28px 22px;'+
+    'font:16px/1.55 -apple-system,system-ui,sans-serif;overflow:auto';
+  d.innerHTML='<h2 style="font-size:20px;margin:0 0 12px">No se pueden abrir tus datos ahora mismo</h2>'+
+    '<p>Están guardados en este iPad, pero el navegador no deja leerlos en este momento. No se ha borrado nada.</p>'+
+    '<p>Cierra la app del todo (desde el selector de apps, deslizándola hacia arriba) y vuelve a abrirla. '+
+    'Si sigue igual, reinicia el iPad.</p>'+
+    '<p style="color:#5a6575;font-size:13px">Detalle: '+String(ALM.motivo||'').replace(/[<>&]/g,'')+'</p>';
+  document.body.appendChild(d);
+}
+</script>
+<script type="text/plain" id="app-src">
 // ═══════════════════════════════════════════════════════════════════════
 // DATA MODEL
 // ═══════════════════════════════════════════════════════════════════════
@@ -2447,10 +2672,10 @@ function refreshLiveRecord(){
 // TODO lo que entra en el total, una línea por posición, con el día en que se
 // tomó ese valor. Si algo sobra o falta, se ve a simple vista.
 let _cuadreOpen=false;
-try{_cuadreOpen=localStorage.getItem('dlv_cuadreopen')==='1';}catch(e){}
+try{_cuadreOpen=ALM.getItem('dlv_cuadreopen')==='1';}catch(e){}
 function toggleCuadre(){
   _cuadreOpen=!_cuadreOpen;
-  try{localStorage.setItem('dlv_cuadreopen',_cuadreOpen?'1':'0');}catch(e){}
+  try{ALM.setItem('dlv_cuadreopen',_cuadreOpen?'1':'0');}catch(e){}
   renderCuadre();
 }
 function cuadreFilas(){
@@ -2678,19 +2903,19 @@ function renderKPIsNoData(year,month){
 
 function save(){
   try{
-    localStorage.setItem('dlv_cfg',JSON.stringify(cfg));
-    localStorage.setItem('dlv_records',JSON.stringify(records));
-    localStorage.setItem('dlv_tx',JSON.stringify(transactions));
-    localStorage.setItem('dlv_sold',JSON.stringify([...soldStocks]));
-    localStorage.setItem('dlv_ballog',JSON.stringify(balanceLog));
-    localStorage.setItem('dlv_income',JSON.stringify(incomeLog));
-    localStorage.setItem('dlv_expense',JSON.stringify(expenseLog));
-    localStorage.setItem('dlv_brokerflows',JSON.stringify(brokerFlows));
-    localStorage.setItem('dlv_reembolsos',JSON.stringify(reembolsos));
-    localStorage.setItem('dlv_personal',JSON.stringify(personal));
+    ALM.setItem('dlv_cfg',JSON.stringify(cfg));
+    ALM.setItem('dlv_records',JSON.stringify(records));
+    ALM.setItem('dlv_tx',JSON.stringify(transactions));
+    ALM.setItem('dlv_sold',JSON.stringify([...soldStocks]));
+    ALM.setItem('dlv_ballog',JSON.stringify(balanceLog));
+    ALM.setItem('dlv_income',JSON.stringify(incomeLog));
+    ALM.setItem('dlv_expense',JSON.stringify(expenseLog));
+    ALM.setItem('dlv_brokerflows',JSON.stringify(brokerFlows));
+    ALM.setItem('dlv_reembolsos',JSON.stringify(reembolsos));
+    ALM.setItem('dlv_personal',JSON.stringify(personal));
     // v133 · Cuándo cambiaron por última vez los datos de ESTE aparato. Sirve
     // para avisar si vas a restaurar encima un archivo más viejo que ellos.
-    localStorage.setItem('dlv_lastchange',new Date().toISOString());
+    ALM.setItem('dlv_lastchange',new Date().toISOString());
     _saveFailed=false;
   }catch(e){
     console.warn('save error',e);
@@ -2734,7 +2959,7 @@ function exportData(){
   a.click();
   document.body.removeChild(a);
   setTimeout(()=>URL.revokeObjectURL(url),1000);
-  try{localStorage.setItem('dlv_lastexport',new Date().toISOString());}catch(e){}
+  try{ALM.setItem('dlv_lastexport',new Date().toISOString());}catch(e){}
   renderBackupReminder();
   toast('Archivo de datos generado: patrimonio_datos_'+today+'.json');
 }
@@ -2744,7 +2969,7 @@ function renderBackupReminder(){
   const el=document.getElementById('backup-reminder');
   if(!el)return;
   let last=null;
-  try{last=localStorage.getItem('dlv_lastexport');}catch(e){}
+  try{last=ALM.getItem('dlv_lastexport');}catch(e){}
   if(!last){
     el.innerHTML='— <span style="color:var(--red);font-weight:600">nunca has hecho copia. Genera un archivo ahora ⚠</span>';
     return;
@@ -2813,17 +3038,17 @@ function mergeData(ev){
 // Dark mode
 function toggleDark(){
   const on=document.body.classList.toggle('dark');
-  try{localStorage.setItem('dlv_dark',on?'1':'0');}catch(e){}
+  try{ALM.setItem('dlv_dark',on?'1':'0');}catch(e){}
   const btn=document.getElementById('dark-btn');if(btn)btn.textContent=on?'☀️':'🌙';
   if(typeof initCharts==='function'&&document.getElementById('cPat'))initCharts();
 }
 function applyDarkPref(){
-  let on=false;try{on=localStorage.getItem('dlv_dark')==='1';}catch(e){}
+  let on=false;try{on=ALM.getItem('dlv_dark')==='1';}catch(e){}
   if(on){document.body.classList.add('dark');const btn=document.getElementById('dark-btn');if(btn)btn.textContent='☀️';}
 }
 function restoreSectionStates(){
   try{
-    const s=JSON.parse(localStorage.getItem('dlv_sections')||'{}');
+    const s=JSON.parse(ALM.getItem('dlv_sections')||'{}');
     if(s.open!=null)_stockSections.open=s.open;
     if(s.movs!=null)_stockSections.movs=s.movs;
     if(s.closed!=null)_stockSections.closed=s.closed;
@@ -2831,7 +3056,7 @@ function restoreSectionStates(){
     if(s.income!=null)_incomeOpen=s.income;
   }catch(e){}
   try{
-    if(localStorage.getItem('dlv_rentab_open')==='1'){
+    if(ALM.getItem('dlv_rentab_open')==='1'){
       _rentabOpen=true;
       const div=document.getElementById('rentab-collapse');const arr=document.getElementById('rentab-arrow');
       if(div)div.style.display='block';if(arr)arr.textContent='▾';
@@ -3891,7 +4116,7 @@ function importData(ev){
       // se compara la fecha del archivo con la del último cambio local.
       let _avisoViejo='';
       try{
-        const _lc=localStorage.getItem('dlv_lastchange'), _fe=data._exported||null;
+        const _lc=ALM.getItem('dlv_lastchange'), _fe=data._exported||null;
         if(_lc&&_fe&&_fe<_lc&&(records.length||expenseLog.length||incomeLog.length)){
           const _h=Math.round((Date.parse(_lc)-Date.parse(_fe))/36e5);
           _avisoViejo='\n\n⚠️  OJO: ESTE ARCHIVO ES MÁS ANTIGUO QUE LO QUE TIENES AQUÍ.\n'+
@@ -3925,7 +4150,7 @@ function importData(ev){
       goToCurrentMonth();
       // El aparato queda con la antigüedad del archivo, no con la de hoy: si no,
       // el siguiente archivo bueno parecería viejo y avisaría sin motivo.
-      try{ if(data._exported)localStorage.setItem('dlv_lastchange',data._exported); }catch(e){}
+      try{ if(data._exported)ALM.setItem('dlv_lastchange',data._exported); }catch(e){}
       toast('✅ Datos restaurados desde el archivo'+(data._exported?' ('+data._exported.slice(0,10)+')':''));
     }catch(err){
       toast('Error al leer el archivo: '+err.message);
@@ -3937,10 +4162,10 @@ function importData(ev){
 function load(){
   loadPersonal();
   try{
-    const c=localStorage.getItem('dlv_cfg');
-    const r=localStorage.getItem('dlv_records');
-    const tx=localStorage.getItem('dlv_tx');
-    const sol=localStorage.getItem('dlv_sold');
+    const c=ALM.getItem('dlv_cfg');
+    const r=ALM.getItem('dlv_records');
+    const tx=ALM.getItem('dlv_tx');
+    const sol=ALM.getItem('dlv_sold');
     if(c)cfg=JSON.parse(c);
     // Ensure gastos_fijos exists (backward compat)
     if(!cfg.gastos_fijos||!cfg.gastos_fijos.length) cfg.gastos_fijos=[...DEF_GASTOS_FIJOS];
@@ -3950,25 +4175,25 @@ function load(){
     else records=SEED.map(parseSeed);
     if(tx)transactions=JSON.parse(tx);
     if(sol)soldStocks=new Set(JSON.parse(sol));
-    const bl=localStorage.getItem('dlv_ballog');
+    const bl=ALM.getItem('dlv_ballog');
     if(bl)balanceLog=JSON.parse(bl);
-    const il=localStorage.getItem('dlv_income');
+    const il=ALM.getItem('dlv_income');
     if(il)incomeLog=JSON.parse(il);
-    const el=localStorage.getItem('dlv_expense');
+    const el=ALM.getItem('dlv_expense');
     if(el)expenseLog=JSON.parse(el);
-    const bf=localStorage.getItem('dlv_brokerflows');
+    const bf=ALM.getItem('dlv_brokerflows');
     if(bf)brokerFlows=JSON.parse(bf);
-    const rb=localStorage.getItem('dlv_reembolsos');
+    const rb=ALM.getItem('dlv_reembolsos');
     if(rb)reembolsos=JSON.parse(rb);
   }catch(e){records=SEED.map(parseSeed);}
   // Migrate/repair: recompute all stock sell cost bases with FIFO
   try{recomputeAllStockGains();}catch(e){console.warn('recompute error',e);}
   // One-time rename: Plan Pensiones Cobas → AZ Valor Internacional
   try{
-    if(!localStorage.getItem('dlv_mig_azvalor')){
+    if(!ALM.getItem('dlv_mig_azvalor')){
       const f=cfg.funds.find(x=>x.id==='pp_cobas');
       if(f&&/plan\s*pensiones\s*cobas/i.test(f.name)){ f.name='AZ Valor Internacional'; save(); }
-      localStorage.setItem('dlv_mig_azvalor','1');
+      ALM.setItem('dlv_mig_azvalor','1');
     }
   }catch(e){}
   // v150 · Deshacer el reparto por bróker que hizo la v149, que se basaba en un
@@ -3978,15 +4203,15 @@ function load(){
   // justo los que estampó aquella migración: se les quita y vuelven a ser lo
   // que eran, apuntes heredados sin bróker.
   try{
-    if(!localStorage.getItem('dlv_mig_brk2')){
+    if(!ALM.getItem('dlv_mig_brk2')){
       let deshechos=0;
       balanceLog.forEach(b=>{
         if(b.refType!=='stock'||!b.brk)return;
         if(String(b.id||'').indexOf(b.brk)<0){ delete b.brk; deshechos++; }
       });
       if(deshechos)save();
-      localStorage.setItem('dlv_mig_brk2','1');
-      localStorage.removeItem('dlv_mig_brk');
+      ALM.setItem('dlv_mig_brk2','1');
+      ALM.removeItem('dlv_mig_brk');
     }
   }catch(e){console.warn('mig brk2',e);}
   // Remove phantom stocks left over from old versions (no ops, no value)
@@ -5523,7 +5748,7 @@ const ING_CSS={nomina:'cat-nomina',ipt:'cat-ipt',rend:'cat-rend',extra:'cat-extr
 let _incomeOpen=false;
 function toggleIncomeSection(){
   _incomeOpen=!_incomeOpen;
-  try{localStorage.setItem('dlv_sections',JSON.stringify({..._stockSections,income:_incomeOpen}));}catch(e){}
+  try{ALM.setItem('dlv_sections',JSON.stringify({..._stockSections,income:_incomeOpen}));}catch(e){}
   const div=document.getElementById('income-content');
   const btn=document.getElementById('toggle-income-btn');
   if(div)div.style.display=_incomeOpen?'block':'none';
@@ -6218,7 +6443,7 @@ function removeBroker(id){
 }
 function toggleStockSection(which){
   _stockSections[which]=!_stockSections[which];
-  try{localStorage.setItem('dlv_sections',JSON.stringify({..._stockSections,income:_incomeOpen}));}catch(e){}
+  try{ALM.setItem('dlv_sections',JSON.stringify({..._stockSections,income:_incomeOpen}));}catch(e){}
   const map={open:['stock-positions','toggle-open-btn','posiciones abiertas y valores'],
     movs:['stock-tx-wrap','toggle-movs-btn','movimientos registrados'],
     closed:['stock-closed-list','toggle-closed-btn','operaciones cerradas'],
@@ -6940,8 +7165,8 @@ function renderRecibos(){
 }
 // ═══ COMPENSACIONES / REEMBOLSOS (Bizum) ════════════════════════════
 let _reembForm=null;
-let _reembListOpen=false; try{_reembListOpen=localStorage.getItem('dlv_reemblistopen')==='1';}catch(e){}
-function toggleReembList(){ _reembListOpen=!_reembListOpen; try{localStorage.setItem('dlv_reemblistopen',_reembListOpen?'1':'0');}catch(e){} applyReembListVis(); }
+let _reembListOpen=false; try{_reembListOpen=ALM.getItem('dlv_reemblistopen')==='1';}catch(e){}
+function toggleReembList(){ _reembListOpen=!_reembListOpen; try{ALM.setItem('dlv_reemblistopen',_reembListOpen?'1':'0');}catch(e){} applyReembListVis(); }
 function applyReembListVis(){
   const div=document.getElementById('reemb-list');
   const btn=document.getElementById('toggle-reemb-btn');
@@ -7031,7 +7256,7 @@ function reembSave(){
   if(!eids.length){toast('Selecciona al menos un gasto.');return;}
   const notes={}; eids.forEach(e=>{const n=(_reembForm.notes[e]||'').trim();if(n)notes[e]=n;});
   reembolsos.push({id:'rb_'+Date.now().toString(36)+Math.random().toString(36).slice(2,6),incomeId:_reembForm.incomeId,expenseIds:eids,notes,created:new Date().toISOString()});
-  _reembForm=null; _reembListOpen=true; try{localStorage.setItem('dlv_reemblistopen','1');}catch(e){} save();
+  _reembForm=null; _reembListOpen=true; try{ALM.setItem('dlv_reemblistopen','1');}catch(e){} save();
   renderReembolsos(); loadMonthEntries(); renderTxIngList(); renderGastosList(); renderAll();
   toast('✅ Compensación guardada: '+eids.length+' gasto(s) fuera de los totales');
 }
@@ -8158,11 +8383,11 @@ function renderCuadrePos(open){
 // independencia de cuánto metiste. Son preguntas distintas y las dos importan:
 // 2.000€ ganados sobre 40.000 es un 5%, y 800€ sobre 1.000 es un 80%. La barra
 // más larga en euros suele ser la peor operación en porcentaje.
-let _anChartMode=(function(){try{return localStorage.getItem('dlv_anchart_mode')||'eur';}catch(e){return 'eur';}})();
+let _anChartMode=(function(){try{return ALM.getItem('dlv_anchart_mode')||'eur';}catch(e){return 'eur';}})();
 let _anLastOps=null;
 function setAnChartMode(m){
   _anChartMode=m;
-  try{localStorage.setItem('dlv_anchart_mode',m);}catch(e){}
+  try{ALM.setItem('dlv_anchart_mode',m);}catch(e){}
   document.querySelectorAll('.an-chart-btn').forEach(b=>b.classList.toggle('active',b.dataset.mode===m));
   if(_anLastOps){renderAnalisisChart(_anLastOps.closed,_anLastOps.open);
     try{renderRecorridoChart(_anLastOps.closed,_anLastOps.open);}catch(e){console.warn('recorrido',e);}}
@@ -8400,10 +8625,10 @@ function renderAnalisisCompras(){
   markScrollables(box);
 }
 let _anRecChart=null;
-let _anRecModo=(function(){try{return localStorage.getItem('dlv_anrec_modo')||'accion';}catch(e){return 'accion';}})();
+let _anRecModo=(function(){try{return ALM.getItem('dlv_anrec_modo')||'accion';}catch(e){return 'accion';}})();
 function setRecModo(m){
   _anRecModo=m;
-  try{localStorage.setItem('dlv_anrec_modo',m);}catch(e){}
+  try{ALM.setItem('dlv_anrec_modo',m);}catch(e){}
   document.querySelectorAll('.an-rec-btn').forEach(b=>b.classList.toggle('active',b.dataset.rec===m));
   if(_anLastOps)renderRecorridoChart(_anLastOps.closed,_anLastOps.open);
 }
@@ -10250,7 +10475,7 @@ function toggleRentab(){
   const arr=document.getElementById('rentab-arrow');
   if(div)div.style.display=_rentabOpen?'block':'none';
   if(arr)arr.textContent=_rentabOpen?'▾':'▸';
-  try{localStorage.setItem('dlv_rentab_open',_rentabOpen?'1':'0');}catch(e){}
+  try{ALM.setItem('dlv_rentab_open',_rentabOpen?'1':'0');}catch(e){}
 }
 
 function renderRentabilidad(){
@@ -10501,7 +10726,7 @@ function currentStateObj(){
 // Guarda el estado ANTES de una operación destructiva. Devuelve false si no cabe.
 function snapshotState(label){
   try{
-    localStorage.setItem('dlv_undo',JSON.stringify({label,at:new Date().toISOString(),data:currentStateObj()}));
+    ALM.setItem('dlv_undo',JSON.stringify({label,at:new Date().toISOString(),data:currentStateObj()}));
     renderUndoBar();
     return true;
   }catch(e){
@@ -10514,7 +10739,7 @@ function guardedAction(label){
   return confirm('No hay espacio para guardar una copia de seguridad interna, así que esta acción NO se podrá deshacer.\n\nGenera antes un archivo de copia si quieres estar cubierto.\n\n¿Continuar de todas formas?');
 }
 function getUndo(){
-  try{const raw=localStorage.getItem('dlv_undo');return raw?JSON.parse(raw):null;}catch(e){return null;}
+  try{const raw=ALM.getItem('dlv_undo');return raw?JSON.parse(raw):null;}catch(e){return null;}
 }
 function renderUndoBar(){
   const bar=document.getElementById('undo-bar'),txt=document.getElementById('undo-txt');
@@ -10540,7 +10765,7 @@ function undoLast(){
     migrateFundIdent();
     recomputeAllStockGains();
     _recatIndex=null;
-    localStorage.removeItem('dlv_undo');
+    ALM.removeItem('dlv_undo');
     save(); renderAll(); goToCurrentMonth(); renderUndoBar(); renderDiag();
     toast('↩ Estado restaurado');
   }catch(e){toast('No se pudo deshacer: '+e.message);}
@@ -10557,10 +10782,9 @@ function toggleDiag(){
   if(a)a.textContent=_diagOpen?'▾':'▸';
   if(_diagOpen)renderDiag();
 }
+// v166 · Lo que ocupan tus datos, estén en IndexedDB o en ALM
 function lsBytes(){
-  let t=0;
-  try{for(const k of Object.keys(localStorage)) t+=(localStorage.getItem(k)||'').length+k.length;}catch(e){}
-  return t;
+  try{ return ALM.tamano(); }catch(e){ return 0; }
 }
 function dupKeyOf(x,isInc){
   const nm=recatNorm(isInc?x.desc:x.name).slice(0,18);
@@ -10766,7 +10990,9 @@ function renderDiag(){
   if(!badge)return;
   const bytes=lsBytes();
   const kb=Math.round(bytes/1024);
-  const pct=Math.min(100,Math.round(bytes/(5*1024*1024)*100));
+  // v166 · en IndexedDB no hay tope de 5 MB: ya no hay límite del que avisar
+  const sinTope=ALM.modo==='idb';
+  const pct=sinTope?0:Math.min(100,Math.round(bytes/(5*1024*1024)*100));
   const dup=findDupes();
   const nDup=dup.exp.length+dup.inc.length;
   const sinCat=recatPending(false).length;
@@ -10781,7 +11007,9 @@ function renderDiag(){
   if(!body||!_diagOpen)return;
   const li=(icon,txt,extra)=>'<div style="display:flex;gap:.5rem;align-items:flex-start;padding:.3rem 0;font-size:11.5px;border-bottom:.5px solid var(--border)"><span>'+icon+'</span><div style="flex:1">'+txt+(extra?'<div style="font-size:10.5px;color:var(--faint);margin-top:2px">'+extra+'</div>':'')+'</div></div>';
   let h='';
-  h+=li(pct>=80?'🔴':'💽','<strong>Almacenamiento</strong>: '+kb+' KB usados ('+pct+'% del límite típico del navegador)',
+  h+=li(pct>=80?'🔴':'💽','<strong>Almacenamiento</strong>: '+kb+' KB'+(sinTope
+      ? ' en IndexedDB, sin el tope de 5 MB del navegador'+(ALM.persistente?', y marcados como permanentes':'')
+      : ' usados ('+pct+'% del límite típico del navegador)'),
     pct>=80?'Estás cerca del límite. Genera un archivo de copia y considera archivar años antiguos.':'Margen de sobra. Aun así, el navegador puede borrar estos datos si limpias el historial: la copia en archivo es tu única red real.');
   const nOk=((cfg.dupOk)||[]).length;
   const gruposDup=[...dup.exp.map(g=>[g,false]),...dup.inc.map(g=>[g,true])];
@@ -10819,12 +11047,12 @@ function renderDiag(){
   h+=li('↩','<strong>Deshacer disponible</strong>: '+(u?escapeHtml(u.label)+' ('+fmtDateFull(u.at.slice(0,10))+')':'nada pendiente')+
     (u?' <button type="button" class="btn-xs" onclick="undoLast()" style="margin-left:.4rem">Deshacer</button>'+
        ' <button type="button" class="btn-xs" onclick="discardUndo()" style="margin-left:.2rem">Descartar copia</button>':''),
-    'Antes de cada importación, fusión o cambio en bloque se guarda una copia interna del estado anterior.'+(u?' Ocupa unos '+Math.round((localStorage.getItem('dlv_undo')||'').length/1024)+' KB.':''));
+    'Antes de cada importación, fusión o cambio en bloque se guarda una copia interna del estado anterior.'+(u?' Ocupa unos '+Math.round((ALM.getItem('dlv_undo')||'').length/1024)+' KB.':''));
   body.innerHTML=h;
 }
 function discardUndo(){
   if(!confirm('Borrar la copia interna de deshacer? Libera espacio, pero ya no podrás revertir la última operación.'))return;
-  try{localStorage.removeItem('dlv_undo');}catch(e){}
+  try{ALM.removeItem('dlv_undo');}catch(e){}
   renderUndoBar();renderDiag();toast('Copia de deshacer borrada');
 }
 function diagCleanDupes(){
@@ -11348,7 +11576,7 @@ function recatGroups(){
 }
 function toggleRecat(){
   _recatOpen=!_recatOpen;
-  try{localStorage.setItem('dlv_recatopen',_recatOpen?'1':'0');}catch(e){}
+  try{ALM.setItem('dlv_recatopen',_recatOpen?'1':'0');}catch(e){}
   renderRecatPanel();
 }
 function recatToggleIgnored(){_recatShowIgnored=!_recatShowIgnored;renderRecatPanel();}
@@ -11533,7 +11761,7 @@ function FUND_ANCHORS(){return personal.fundAnchors||[];}
 function FUND_SER(){return personal.fundSeries||{};}
 function personalCount(){return NOM_HIST().length+STK_DAILY().length+FUND_ANCHORS().length+Object.keys(FUND_SER()).length+Object.keys(personal.navHistory||{}).length;}
 function loadPersonal(){
-  try{const r=localStorage.getItem('dlv_personal');if(r){const p=JSON.parse(r);if(p&&typeof p==='object')personal=p;}}catch(e){}
+  try{const r=ALM.getItem('dlv_personal');if(r){const p=JSON.parse(r);if(p&&typeof p==='object')personal=p;}}catch(e){}
   personal.nominasHist=personal.nominasHist||[];
   personal.stockDaily=personal.stockDaily||[];
   personal.fundAnchors=personal.fundAnchors||[];
@@ -11554,7 +11782,7 @@ function loadPersonal(){
   if(mig)savePersonal();
 }
 function savePersonal(){
-  try{localStorage.setItem('dlv_personal',JSON.stringify(personal));}
+  try{ALM.setItem('dlv_personal',JSON.stringify(personal));}
   catch(e){console.warn('savePersonal',e);}
 }
 function setPersonal(p,how){
@@ -11753,17 +11981,17 @@ function syncDigest(st){
   return out;
 }
 function loadSyncBase(){
-  try{const r=localStorage.getItem('dlv_syncbase');return r?JSON.parse(r):null;}catch(e){return null;}
+  try{const r=ALM.getItem('dlv_syncbase');return r?JSON.parse(r):null;}catch(e){return null;}
 }
 function saveSyncBase(st,seq,peer){
   try{
-    localStorage.setItem('dlv_syncbase',JSON.stringify({
+    ALM.setItem('dlv_syncbase',JSON.stringify({
       at:new Date().toISOString(),seq:seq||0,peer:peer||null,d:syncDigest(st)}));
   }catch(e){console.warn('syncbase',e);toast('⚠ No se pudo guardar la huella de sincronía');}
 }
 function syncDeviceName(){
   let n=null;
-  try{n=localStorage.getItem('dlv_devname');}catch(e){}
+  try{n=ALM.getItem('dlv_devname');}catch(e){}
   if(n)return n;
   const ua=navigator.userAgent||'';
   if(/iPad/i.test(ua)||(/Macintosh/.test(ua)&&navigator.maxTouchPoints>1))return 'iPad';
@@ -11774,7 +12002,7 @@ function syncDeviceName(){
   return 'este dispositivo';
 }
 function setSyncDeviceName(v){
-  try{localStorage.setItem('dlv_devname',String(v||'').trim()||syncDeviceName());}catch(e){}
+  try{ALM.setItem('dlv_devname',String(v||'').trim()||syncDeviceName());}catch(e){}
   renderSyncPanel();
 }
 
@@ -12861,7 +13089,7 @@ function degiroCommit(){
       flujos++;
     });
   }
-  try{localStorage.setItem('dlv_degiro_last',JSON.stringify({at:new Date().toISOString(),date,n:act,
+  try{ALM.setItem('dlv_degiro_last',JSON.stringify({at:new Date().toISOString(),date,n:act,
     fuente:P.fuente,broker:bk?bk.name:null}));}catch(e){}
   _dgPending=null;
   save(); renderAll(); renderDegiroPanel();
@@ -12875,7 +13103,7 @@ function degiroCommit(){
 function renderDegiroPanel(){
   const el=document.getElementById('degiro-body'); if(!el)return;
   let last=null;
-  try{last=JSON.parse(localStorage.getItem('dlv_degiro_last')||'null');}catch(e){}
+  try{last=JSON.parse(ALM.getItem('dlv_degiro_last')||'null');}catch(e){}
   const conIsin=cfg.stocks.filter(s=>s.isin).length;
   let h='<div style="font-size:11.5px;color:var(--muted);margin-bottom:.45rem">'+
     (last?'Última actualización: valores del <strong>'+fmtDate(last.date)+'</strong> ('+last.n+' posiciones'+
@@ -13921,10 +14149,10 @@ function stkCopiarBusqueda(id){
 // que verla a diario. El resumen se queda en la cabecera, y si algo va mal el
 // aviso obliga a abrirla.
 let _preciosOpen=false;
-try{_preciosOpen=localStorage.getItem('dlv_preciosopen')==='1';}catch(e){}
+try{_preciosOpen=ALM.getItem('dlv_preciosopen')==='1';}catch(e){}
 function togglePrecios(){
   _preciosOpen=!_preciosOpen;
-  try{localStorage.setItem('dlv_preciosopen',_preciosOpen?'1':'0');}catch(e){}
+  try{ALM.setItem('dlv_preciosopen',_preciosOpen?'1':'0');}catch(e){}
   renderPrecios();
 }
 function renderPrecios(){
@@ -16441,7 +16669,7 @@ renderAll();
 goToCurrentMonth();
 applyDarkPref();
 renderBackupReminder();
-try{_recatOpen=localStorage.getItem('dlv_recatopen')==='1';}catch(e){}
+try{_recatOpen=ALM.getItem('dlv_recatopen')==='1';}catch(e){}
 renderRecatPanel();
 renderUndoBar();
 renderDiag();
@@ -16465,6 +16693,18 @@ initLayoutObserver();
   on();
 })();
 </script>
+<script>
+// v166 · La app arranca cuando el almacén está listo: la primera vez, después
+// de mudar tus datos a IndexedDB. Hasta entonces su código espera aquí abajo,
+// sin ejecutarse, para que nada lea el almacén antes de tiempo.
+ALM.listo.then(()=>{
+  if(ALM.modo==='roto'){ almacenRoto(); return; }
+  const s=document.createElement('script');
+  s.textContent=document.getElementById('app-src').textContent;
+  document.body.appendChild(s);
+});
+</script>
+
 <script>
 
 // ════════════════════════════════════════════════════════════════════
