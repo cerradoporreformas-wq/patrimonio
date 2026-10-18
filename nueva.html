@@ -10629,6 +10629,16 @@ function xtbISO(v){
     return d.getUTCFullYear()+'-'+p2(d.getUTCMonth()+1)+'-'+p2(d.getUTCDate()); }
   return null;
 }
+// v167 · Lo mismo pero con la hora, en milisegundos: hace falta para saber si
+// una posición se abrió antes de que empiece el extracto y para ordenar los
+// movimientos de un mismo día (el ingreso va antes que la compra que paga).
+function xtbMs(v){
+  if(v instanceof Date&&!isNaN(v))return v.getTime();
+  const s=String(v==null?'':v).trim(); if(!s)return null;
+  const n=Number(s.replace(',','.'));
+  if(isFinite(n)&&n>20000&&n<80000)return Math.round((n-25569)*86400000);
+  const t=Date.parse(s.replace(' ','T')); return isNaN(t)?null:t;
+}
 // El .xlsx es un zip; el archivo que descargas de XTB es OTRO zip con el
 // .xlsx dentro. Se prueba primero como Excel y, si no lo es, se abre como
 // zip y se busca la hoja de cálculo que lleve dentro.
@@ -10690,19 +10700,26 @@ function xtbParse(buf){
   // el número de posición (2804500611). Cogerlas todas contaba la acción dos
   // veces y creaba una posición fantasma llamada como el número. Manda la fila
   // resumen; las de número solo se usan si no hubiera resumen.
-  const rows=[]; const crudas=[];
+  const rows=[]; const crudas=[]; const abiertasEn=[]; const nombreTick={};
   if(abiertas){
     const hi=xtbCab(abiertas,[/instrument|posici/i,/^value$|^valor$/i,/^volume$|^volumen$/i]);
     if(hi>=0){
       const H=abiertas[hi];
       const ci={prod:xtbCol(H,/instrument|posici/i), tick:xtbCol(H,/^ticker$|^s[ií]mbolo$/i),
                 qty:xtbCol(H,/^volume$|^volumen$/i), eur:xtbCol(H,/^value$|^valor$/i),
-                px:xtbCol(H,/current\s*price|precio\s*actual/i)};
+                px:xtbCol(H,/current\s*price|precio\s*actual/i),
+                abre:xtbCol(H,/open\s*time|hora\s*de\s*apertura|fecha\s*de\s*apertura/i)};
       for(let i=hi+1;i<abiertas.length;i++){
         const r=abiertas[i]||[];
         const prod=String(r[ci.prod]||'').trim();
         if(!prod)continue;
         if(/^(note|nota|total|totales)$/i.test(prod))continue;
+        // v167 · las filas de cada posición traen su hora de apertura; el nombre,
+        // la fila resumen de encima
+        const tk=ci.tick>=0?String(r[ci.tick]||'').trim().toUpperCase():'';
+        if(!/^\d{5,}$/.test(prod)&&tk)nombreTick[tk]=prod;
+        const ab=ci.abre>=0?xtbMs(r[ci.abre]):null;
+        if(ab!=null)abiertasEn.push({nombre:nombreTick[tk]||tk||prod,t:ab});
         const eur=xtbNum(r[ci.eur]);
         if(eur==null)continue;
         crudas.push({prod,isin:'',qty:ci.qty>=0?xtbNum(r[ci.qty]):null,eur,
@@ -10739,7 +10756,7 @@ function xtbParse(buf){
         const amt=xtbNum(r[ci.amt]);
         if(amt==null)continue;
         cash+=amt;
-        const o={tipo,fecha:xtbISO(r[ci.time]),amount:amt,
+        const o={tipo,fecha:xtbISO(r[ci.time]),t:xtbMs(r[ci.time]),amount:amt,
                  id:String(ci.id>=0?(r[ci.id]||''):'').trim(),
                  com:String(ci.com>=0?(r[ci.com]||''):'').trim(),
                  instr:String(ci.instr>=0?(r[ci.instr]||''):'').trim(),
@@ -10759,19 +10776,32 @@ function xtbParse(buf){
   const gen  =xtbISO(xtbEtiqueta(abiertas,/data\s*as\s*of|generad/i));
   const hasta=xtbISO(xtbEtiqueta(caja||abiertas,/date\s*to|hasta/i));
   const desde=xtbISO(xtbEtiqueta(caja||abiertas,/date\s*from|desde/i));
+  const desdeT=xtbMs(xtbEtiqueta(caja||abiertas,/date\s*from|desde/i));
   const fOps =ops.map(o=>o.fecha).filter(Boolean).sort();
   const fecha=gen||hasta||(fOps.length?fOps[fOps.length-1]:null);
   const cuenta=String(xtbEtiqueta(abiertas||caja,/account\s*number|n[uú]mero\s*de\s*cuenta/i)||'').trim();
-  let nCerr=0;
+  let nCerr=0; const cerradasEn=[];
   if(cerradas){
     const hc=xtbCab(cerradas,[/^instrument$|instrumento/i,/profit\s*\/?\s*loss|beneficio/i]);
-    if(hc>=0)for(let i=hc+1;i<cerradas.length;i++){
-      const p=String((cerradas[i]||[])[0]||'').trim();
-      if(p&&!/^(profit|p[eé]rdida|total)/i.test(p))nCerr++;
+    if(hc>=0){
+      const abre=xtbCol(cerradas[hc],/open\s*time|hora\s*de\s*apertura|fecha\s*de\s*apertura/i);
+      const tk=xtbCol(cerradas[hc],/^ticker$|^s[ií]mbolo$/i);
+      for(let i=hc+1;i<cerradas.length;i++){
+        const r=cerradas[i]||[];
+        const p=String(r[0]||'').trim();
+        if(p&&!/^(profit|p[eé]rdida|total)/i.test(p)){
+          nCerr++;
+          const ab=abre>=0?xtbMs(r[abre]):null;
+          if(ab!=null)cerradasEn.push({nombre:(tk>=0?String(r[tk]||'').trim():'')||p,t:ab});
+        }
+      }
     }
   }
+  // v167 · posiciones (abiertas o cerradas en el periodo) que se abrieron antes
+  // de la fecha de inicio: su compra no está en el archivo
+  const posAntes=desdeT==null?[]:abiertasEn.concat(cerradasEn).filter(p=>p.t<desdeT);
   return {rows,porCabecera:true,head:[],fuente:'xtb',
-          cash,cashOps:ops,ops:opsBolsa,nDep,nRet,desde,hasta,fecha,cuenta,nCerr};
+          cash,cashOps:ops,ops:opsBolsa,nDep,nRet,desde,desdeT,hasta,fecha,cuenta,nCerr,posAntes};
 }
 
 // ── Las compras y ventas, que XTB mete en la misma hoja de caja ────
@@ -10986,27 +11016,40 @@ function brokerRead(parsed,fname,mtime,fuente){
     fname:fname||(fuente==='xtb'?'extracto XTB':'Portfolio.csv'),date:d};
   showDegiroPreview();
 }
-// v145 · La suma de las operaciones de caja de XTB solo es el saldo si el
-// extracto arranca en la apertura de la cuenta. Hasta ahora eso era un aviso
-// y punto. Se puede hacer mejor: si ya tienes un saldo de ese bróker anterior
-// al periodo del extracto, el saldo nuevo es ese más lo que se ha movido, y
-// entonces da igual que el extracto sea de un mes suelto. Y si no hay saldo
-// previo y el extracto no empieza por un ingreso, no se propone cifra: la
-// tendrás que poner tú, que es mejor que dar por buena una inventada.
-function xtbEfectivo(P,brokerId){
-  const suma=(P.parsed.cash!=null&&isFinite(P.parsed.cash))?Number(P.parsed.cash):null;
+// v167 · La liquidez de XTB sale SOLO del archivo, sin mirar saldos de antes.
+// XTB no escribe el saldo en ninguna casilla: el efectivo es la suma de todas
+// las operaciones de caja, siempre que el extracto empiece cuando abriste la
+// cuenta. Eso se comprueba con el propio archivo, de dos maneras:
+//   · si alguna posición se abrió antes de la fecha de inicio, su compra no
+//     está en el archivo, y tampoco el dinero que la pagó;
+//   · si, ordenando los movimientos por hora, el saldo quedara en negativo en
+//     algún momento, es que ya había dinero antes que no aparece.
+// En los dos casos la suma no es tu saldo: no se propone cifra, se explica por
+// qué y cómo descargarlo para que salga exacta.
+// Antes se encadenaba con el último saldo guardado anterior al extracto, y si
+// entre ese saldo y el inicio había compras que el archivo no trae, salía mal:
+// con el extracto del 16/9 al 17/10 daba 4.033 € en vez de 2.047 €.
+function xtbEfectivo(P){
+  const X=(P&&P.parsed)||{};
+  const suma=(X.cash!=null&&isFinite(X.cash))?Number(X.cash):null;
   if(suma==null)return {cash:null,modo:'nada'};
-  const ops=(P.parsed.cashOps||[]).slice().filter(o=>o.fecha).sort((a,b)=>a.fecha.localeCompare(b.fecha));
-  const arrancaEnCero=ops.length&&/deposit|ingreso|dep[oó]sito/i.test(ops[0].tipo);
-  let previo=null;
-  if(brokerId&&brokerId!=='__nuevo__'){
-    const desde=P.parsed.desde||P.date;
-    previo=(typeof getBalanceEntries==='function'?getBalanceEntries('broker',brokerId):[])
-      .filter(b=>b.date<desde).sort((a,b)=>b.date.localeCompare(a.date))[0]||null;
-  }
-  if(previo)return {cash:Math.round((previo.amount+suma)*100)/100,modo:'encadenado',previo};
-  if(arrancaEnCero)return {cash:suma,modo:'completo'};
-  return {cash:null,modo:'parcial',suma};
+  const antes=(X.posAntes||[]).slice().sort((a,b)=>a.t-b.t);
+  if(antes.length)return {cash:null,modo:'parcial',motivo:'antes',suma,primera:antes[0]};
+  const clave=o=>o.t!=null?o.t:(o.fecha?Date.parse(o.fecha):0);
+  const ops=(X.cashOps||[]).slice().sort((a,b)=>(clave(a)-clave(b))||(b.amount-a.amount));
+  let s=0,min=0;
+  ops.forEach(o=>{ s+=o.amount; if(s<min)min=s; });
+  if(min<-0.01)return {cash:null,modo:'parcial',motivo:'negativo',suma};
+  return {cash:Math.round(suma*100)/100,modo:'completo'};
+}
+// Por qué un extracto no basta para saber el saldo, en una frase
+function xtbEfectivoMotivo(efe,X){
+  if(!efe||efe.modo!=='parcial')return '';
+  const suma=' La suma de sus operaciones ('+fmt2(efe.suma||0)+'€) no es tu saldo.';
+  if(efe.motivo==='antes'&&efe.primera)
+    return 'Empieza el '+fmtDate((X&&X.desde)||'')+' y tienes posiciones abiertas desde el '+
+      fmtDate(xtbISO(new Date(efe.primera.t)))+' ('+efe.primera.nombre+'): el dinero que había antes no aparece en él.'+suma;
+  return 'Con solo lo que trae, el saldo quedaría en negativo en algún momento: había dinero antes de la fecha de inicio que no aparece en él.'+suma;
 }
 function degiroSetBroker(v){
   if(!_dgPending)return;
@@ -11093,7 +11136,8 @@ function showDegiroPreview(){
     const sug=brokerSugerido(P.fuente);
     P.brokerSel=sug?sug.id:'__nuevo__';
   }
-  const efe=esXtb?xtbEfectivo(P,P.brokerSel):null;
+  const efe=esXtb?xtbEfectivo(P):null;
+  P.efe=efe;
   if(P.cash===undefined) P.cash=esXtb?efe.cash:(plan.cash!=null?plan.cash:null);
   h+='<div style="border:1px solid var(--border);border-radius:6px;padding:.55rem .6rem;margin-bottom:.6rem">'+
     '<div style="font-size:11.5px;font-weight:600;margin-bottom:.35rem">Liquidez del bróker</div>'+
@@ -11108,21 +11152,15 @@ function showDegiroPreview(){
     '</div>';
   if(esXtb){
     const per=P.parsed.desde?('('+fmtDate(P.parsed.desde)+' → '+fmtDate(P.parsed.hasta||P.date)+')'):'';
-    if(efe.modo==='encadenado'){
+    if(efe.modo==='completo'){
       h+='<div style="font-size:10.5px;color:var(--muted);margin-top:.35rem;line-height:1.35">'+
-        'Calculado sobre el saldo que ya tenías: <strong>'+fmt2(efe.previo.amount)+'€</strong> a '+fmtDate(efe.previo.date)+
-        ' más <strong>'+fmt2(P.parsed.cash)+'€</strong> de movimiento en el extracto '+per+'. '+
-        'Como el extracto empieza después de ese saldo, no hace falta que venga desde la apertura.</div>';
-    } else if(efe.modo==='completo'){
-      h+='<div style="font-size:10.5px;color:var(--muted);margin-top:.35rem;line-height:1.35">'+
-        'Suma de las '+(P.parsed.cashOps||[]).length+' operaciones de caja del extracto '+per+'. '+
-        'El primer movimiento es un ingreso, así que el extracto parece arrancar con la cuenta a cero.</div>';
-    } else {
+        'Sale solo del archivo: es la suma de sus '+(P.parsed.cashOps||[]).length+' operaciones de caja '+per+'. '+
+        'El extracto empieza antes de todo lo que hay en la cuenta, así que esa suma es tu saldo.</div>';
+    } else if(efe.modo==='parcial'){
       h+='<div style="font-size:10.5px;color:var(--red);margin-top:.35rem;line-height:1.35">'+
-        '<strong>No puedo saber tu saldo con este extracto.</strong> XTB no publica el saldo en ninguna casilla, '+
-        'y este archivo '+per+' empieza por una operación que no es un ingreso: había dinero antes y no sé cuánto. '+
-        'El movimiento del periodo es '+fmt2(efe.suma||0)+'€. '+
-        'Escribe el saldo a mano, o vuelve a exportar desde la apertura de la cuenta.</div>';
+        '<strong>Este extracto no trae todo lo de la cuenta.</strong> '+escapeHtml(xtbEfectivoMotivo(efe,P.parsed))+
+        ' Descárgalo desde el día que abriste la cuenta y la liquidez saldrá exacta solo con el archivo. '+
+        'Mientras, la liquidez no se toca (o escríbela a mano).</div>';
     }
     const flu=(P.parsed.cashOps||[]).filter(o=>o.flujo);
     if(flu.length){
@@ -16175,7 +16213,11 @@ function cuerpo(it){
       '<select data-acc="broker">'+brk.map(b=>'<option value="'+esc(b.id)+'"'+(bs===b.id?' selected':'')+'>'+esc(b.nombre)+'</option>').join('')+
       '<option value="__nuevo__"'+(bs==='__nuevo__'?' selected':'')+'>crear «'+esc(it.broker)+'»</option>'+
       '<option value=""'+(bs===''?' selected':'')+'>— no tocar la liquidez —</option></select>'+
-      (P.cash==null?'<br><span class="neg">Este extracto no permite saber tu saldo: no empieza por un ingreso y no hay un saldo anterior.</span>':'')+'</p>';
+      (P.cash==null
+        ? '<br><span class="neg">'+(P.efeTexto
+            ? esc(P.efeTexto)+' Descárgalo desde el día que abriste la cuenta y saldrá exacta solo con el archivo. Mientras, la liquidez no se toca.'
+            : 'Este archivo no trae operaciones de caja: la liquidez no se toca.')+'</span>'
+        : (P.efeModo==='completo'?'<br><span class="pie">Sale del propio archivo: la suma de todas sus operaciones de caja desde que abriste la cuenta.</span>':''))+'</p>';
     if(P.faltan.length)h+='<p class="pie">No vienen en este archivo y las tienes abiertas: '+P.faltan.map(esc).join(', ')+
       '. No se tocan'+(it.broker==='XTB'?' (es lo normal: están en DEGIRO).':'.')+'</p>';
   } else if(it.tipo==='dgtx'){
@@ -16454,7 +16496,9 @@ async function ejecutar(it){
     it.plan={fuente:P.fuente,fecha:P.date,upd:(P.plan.upd||[]).map(u=>({nombre:u.stk.name,eur:u.row.eur,antes:u.prev})),
       nuevas:(P.plan.nuevas||[]).map(r=>({nombre:r.prod,eur:r.eur})),faltan:(P.plan.faltan||[]).map(s=>s.name),
       cash:P.cash,brokerSel:P.brokerSel,ops:(P.parsed.ops||[]).map(x=>({fecha:x.date,tipo:x.tipo,nombre:x.prod,n:x.n,eur:x.valEUR})),
-      flujos:(P.parsed.cashOps||[]).filter(x=>x.flujo).length,desde:P.parsed.desde,hasta:P.parsed.hasta};
+      flujos:(P.parsed.cashOps||[]).filter(x=>x.flujo).length,desde:P.parsed.desde,hasta:P.parsed.hasta,
+      // v167 · de dónde sale la liquidez, o por qué este archivo no basta
+      efeModo:P.efe?P.efe.modo:null,efeTexto:P.efe?E('xtbEfectivoMotivo')(P.efe,P.parsed):''};
     E('degiroCommit()');
   } else if(it.tipo==='dgtx'){
     const P=E('dgTxParse')(it.texto); if(P.err)throw new Error(P.err);
