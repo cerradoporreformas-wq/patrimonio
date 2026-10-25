@@ -1280,7 +1280,10 @@ const BANK_INC_RULES=[
   [/dividend/i,'dividendo'],
   [/ints|interes|interest|rendimiento/i,'rend'],
 ];
-const BANK_SKIP=/sergio ?bravo|sergiobravo|payout to transit|cash reward|buy trade|sell trade|\boperar\b|azvalor|magallanes|cobas|v\.m\.dia|transf o \/serg|trans inm\/|trf\. sergio|liq\. propia cta|outgoing transfer|incoming transfer/i;
+const BANK_SKIP=/sergio ?bravo|sergiobravo|payout to transit|cash reward|buy trade|sell trade|\boperar\b|azvalor|magallanes|cobas|v\.m\.dia|transf o \/serg|trans inm\/|trf\. sergio|liq\. propia cta|outgoing transfer|incoming transfer|\btraspaso\b/i;
+// v168 · «traspaso» es como llaman los bancos al dinero que pasa entre dos
+// cuentas del mismo titular (de la corriente a la remunerada, por ejemplo):
+// no es ni ingreso ni gasto, como las transferencias a tu nombre.
 function slugCat(label){
   let s=label.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'');
   return 'c_'+(s||'cat')+'_'+Math.random().toString(36).slice(2,6);
@@ -1520,19 +1523,178 @@ function trExtractoFilas(lines){
   }
   return filas.length>1?filas:null;
 }
+// ════════════════════════════════════════════════════════════════════
+// v168 · EL EXTRACTO DE OPENBANK, QUE VIENE EN PDF
+// ════════════════════════════════════════════════════════════════════
+// Openbank da los movimientos en un PDF con forma de certificado («HACE
+// CONSTAR: … se realizaron los siguientes movimientos») y una tabla de cinco
+// columnas: fecha de operación, fecha valor, concepto, importe y saldo.
+//
+// No se puede leer renglón a renglón como el de Trade Republic: el concepto
+// ocupa dos renglones, o más, y va centrado en su celda, medio por encima de
+// la línea de las fechas y los importes y medio por debajo. Con dos
+// movimientos seguidos, el renglón de abajo de uno y el de arriba del
+// siguiente quedan juntos, y por el orden no se sabe de quién es cada uno.
+// Se sabe por la posición en la página: cada movimiento tiene tantos renglones
+// de concepto por encima de su línea como por debajo.
+//
+// El PDF dice además de qué cuenta es (corriente o remunerada, y su número), y
+// con eso se propone bien adónde va el saldo: a esa cuenta de Openbank, o a una
+// nueva con su nombre si todavía no la tienes en la app.
+function obEsExtracto(L){
+  const T=(L||[]).join('\n');
+  return /open\s?bank/i.test(T)&&/hace constar|siguientes movimientos/i.test(T)&&
+    (L||[]).some(x=>/concepto/i.test(x)&&/importe/i.test(x)&&/saldo/i.test(x));
+}
+// «1.000,00 EUR», «-25,00 EUR» o «25,00- EUR» → número; cualquier otra cosa → null
+function obImporte(s){
+  const m=/^([-−+]?)\s*(\d{1,3}(?:\.\d{3})+|\d+),(\d{2})\s*(-?)\s*(?:EUR|€)?$/i
+    .exec(String(s||'').replace(/\s+/g,' ').trim());
+  if(!m)return null;
+  const v=parseFloat(m[2].replace(/\./g,'')+'.'+m[3]);
+  return (m[1]==='-'||m[1]==='−'||m[4]==='-')?-v:v;
+}
+// Los trozos de una línea, con el signo o el «EUR» pegados a su número si el
+// PDF los trae sueltos
+function obCeldas(items){
+  const out=[];
+  items.forEach(o=>{
+    const s=String(o.s||'').trim(), prev=out[out.length-1];
+    const cerca=prev&&(o.x-(prev.x+prev.w))<6;
+    if(cerca&&/^[-−]$/.test(prev.s)&&/^\d/.test(s)){ prev.s+=s; prev.w=o.x+o.w-prev.x; return; }
+    if(cerca&&/\d,\d{2}$/.test(prev.s)&&/^(EUR|€|-)$/i.test(s)){ prev.s+=' '+s; prev.w=o.x+o.w-prev.x; return; }
+    out.push({x:o.x,y:o.y,w:o.w||0,s});
+  });
+  return out;
+}
+function obExtractoFilas(items){
+  const IT=(items||[]).filter(o=>o&&String(o.s||'').trim());
+  const texto=IT.map(o=>String(o.s).trim()).join(' ').replace(/\s+/g,' ');
+  if(!/open\s?bank/i.test(texto))return null;
+  // de qué cuenta es: «la Cuenta (CUENTA CORRIENTE OPEN) 0073 0100 …»
+  let tipo='Cuenta', fin4='';
+  const mc=/la cuenta\s*\(([^)]{2,60})\)\s*((?:[A-Z]{2}\d{2})?[\d ]{8,40})/i.exec(texto);
+  if(mc){
+    const t=mc[1].replace(/\bopen\b/ig,'').replace(/\s+/g,' ').trim().toLowerCase();
+    if(t)tipo=t.charAt(0).toUpperCase()+t.slice(1);
+    fin4=mc[2].replace(/\D/g,'').slice(-4);
+  }
+  const cuenta={banco:'Openbank',patron:'open\\s?bank',tipo,fin4,nombre:'Openbank · '+tipo};
+  const DIA=/^\d{2}\/\d{2}\/\d{4}$/;
+  const filas=[];
+  const paginas=[...new Set(IT.map(o=>o.p))].sort((a,b)=>a-b);
+  for(const p of paginas){
+    // renglones: los trozos que están a la misma altura
+    const R=[];
+    IT.filter(o=>o.p===p).sort((a,b)=>b.y-a.y||a.x-b.x).forEach(o=>{
+      const r=R.find(r=>Math.abs(r.y-o.y)<1);
+      if(r)r.it.push(o); else R.push({y:o.y,it:[o]});
+    });
+    R.forEach(r=>r.it.sort((a,b)=>a.x-b.x));
+    // la cabecera de la tabla: lo que hay por encima no es de la tabla
+    const cab=R.find(r=>r.it.some(o=>/^concepto$/i.test(String(o.s).trim()))&&r.it.some(o=>/^importe$/i.test(String(o.s).trim())));
+    const techo=cab?cab.y-1:Infinity;
+    // cada línea con su fecha y dos importes (el del movimiento y el saldo) es un movimiento
+    const A=[];
+    R.forEach(r=>{
+      if(r.y>techo)return;
+      const cel=obCeldas(r.it);
+      const fechas=cel.filter(c=>DIA.test(c.s));
+      const imps=cel.filter(c=>obImporte(c.s)!=null);
+      if(!fechas.length||imps.length<2)return;
+      const imp=imps[imps.length-2], sal=imps[imps.length-1];
+      if(!(fechas[0].x<imp.x))return;
+      A.push({y:r.y,fo:fechas[0].s,fv:(fechas[1]||fechas[0]).s,imp:obImporte(imp.s),sal:obImporte(sal.s),
+        finFechas:Math.max(...fechas.slice(0,2).map(c=>c.x+c.w)),iniImp:imp.x,lin:[]});
+    });
+    if(!A.length)continue;
+    // los renglones del concepto: lo que cae entre las fechas y los importes
+    const desde=Math.max(...A.map(a=>a.finFechas))-1, hasta=Math.min(...A.map(a=>a.iniImp))-0.5;
+    const C=[];
+    R.forEach(r=>{
+      if(r.y>techo)return;
+      const t=r.it.filter(o=>o.x>=desde&&o.x<hasta);
+      const s=t.map(o=>String(o.s).trim()).filter(Boolean).join(' ').replace(/\s+/g,' ');
+      if(s)C.push({y:r.y,s,h:Math.max(0,...t.map(o=>o.h||0))});
+    });
+    const hs=C.map(c=>c.h).filter(v=>v>0).sort((a,b)=>a-b);
+    const salto=(hs.length?hs[hs.length>>1]:8.2)*1.2;     // de un renglón al siguiente
+    A.sort((a,b)=>b.y-a.y); C.sort((a,b)=>b.y-a.y);
+    // De arriba abajo: los renglones que hay entre dos movimientos son primero
+    // los de debajo del de arriba (tantos como tenía por encima) y luego los de
+    // encima del de abajo. Si son impares, uno va en la misma línea.
+    const reparto=()=>{
+      let i=0;
+      while(i<C.length&&C[i].y-A[0].y>salto*4)i++;      // muy por encima: no es de la tabla
+      for(let k=0;k<A.length;k++){
+        const a=A[k], enc=[];
+        while(i<C.length&&C[i].y>a.y+0.75){enc.push(C[i]);i++;}
+        if(k>0){
+          const prev=A[k-1];
+          if(enc.length<prev.arriba)return false;
+          prev.lin.push(...enc.splice(0,prev.arriba));
+        }
+        a.arriba=enc.length; a.lin.push(...enc);
+        while(i<C.length&&Math.abs(C[i].y-a.y)<=0.75){a.lin.push(C[i]);i++;}
+      }
+      const u=A[A.length-1];
+      for(let n=0;n<u.arriba;n++){
+        if(i>=C.length||u.y-C[i].y>salto*4)return false;
+        u.lin.push(C[i]); i++;
+      }
+      return true;
+    };
+    if(!reparto()){
+      // si la cuenta no cuadra (otra maquetación), cada renglón con el movimiento más cercano
+      A.forEach(a=>{a.lin=[];});
+      C.forEach(c=>{
+        let mejor=null, d=Infinity;
+        A.forEach(a=>{const dd=Math.abs(a.y-c.y); if(dd<d){d=dd;mejor=a;}});
+        if(mejor&&d<=salto*3)mejor.lin.push(c);
+      });
+    }
+    A.forEach(a=>{
+      a.c=a.lin.slice().sort((x,y)=>y.y-x.y).map(x=>x.s).join(' ').replace(/\s+/g,' ').trim();
+      filas.push(a);
+    });
+  }
+  // De más antiguo a más reciente: así el saldo final es el de la última fila
+  // aunque haya dos movimientos el mismo día. El orden del PDF se deduce de la
+  // aritmética del saldo, y si no basta, de las fechas.
+  let desc=0, asc=0;
+  for(let k=0;k+1<filas.length;k++){
+    const a=filas[k], b=filas[k+1];
+    if(Math.abs(a.sal-a.imp-b.sal)<0.011)desc++;
+    if(Math.abs(a.sal+b.imp-b.sal)<0.011)asc++;
+  }
+  const iso=f=>f.slice(6,10)+f.slice(3,5)+f.slice(0,2);
+  if(filas.length>1&&(desc>asc||(desc===asc&&iso(filas[0].fo)>iso(filas[filas.length-1].fo))))filas.reverse();
+  const esp=v=>(v<0?'-':'')+Math.abs(v).toFixed(2).replace('.',',');
+  const out=[['Fecha','Fecha valor','Descripción','Importe','Saldo']];
+  filas.forEach(a=>out.push([a.fo,a.fv,a.c||'Movimiento',esp(a.imp),esp(a.sal)]));
+  return {filas:out,cuenta};
+}
 // El PDF, por el mismo lector que ya usan las nóminas
 // v142 · isTR de más abajo mira las columnas del CSV de Trade Republic, que el
 // PDF no tiene: sin esta marca, el saldo de TR se ofrecía por defecto a la
 // cuenta del otro banco y bastaba con darle a Enter para meterlo donde no era.
 let _bankTR=false;
+// v168 · El banco y la cuenta del extracto, cuando el propio archivo lo dice
+// (el PDF de Openbank lo dice): con eso se propone bien adónde va el saldo.
+let _bankHint=null;
 async function bankFilasPdf(file){
   await loadPdfJs();
   const lines=await extractPdfLines(file);
   const F=trExtractoFilas(lines);
-  if(F)_bankTR=true;
-  if(!F)throw new Error('es un PDF pero no reconozco el formato. De momento solo sé leer el extracto de Trade Republic; '+
+  if(F){ _bankTR=true; return F; }
+  if(obEsExtracto(lines)){
+    const O=obExtractoFilas(await extractPdfItems(file));
+    if(!O||O.filas.length<2)throw new Error('es un extracto de Openbank, pero no he encontrado ningún movimiento dentro');
+    _bankHint=O.cuenta;
+    return O.filas;
+  }
+  throw new Error('es un PDF pero no reconozco el formato. Sé leer los extractos en PDF de Trade Republic y de Openbank; '+
     'si es de otro banco, pide el CSV o el Excel');
-  return F;
 }
 
 function importBankCsv(ev){
@@ -1542,7 +1704,7 @@ function importBankCsv(ev){
   reader.onload=async function(e){
     try{
       const buf=new Uint8Array(e.target.result);
-      _bankTR=false;
+      _bankTR=false; _bankHint=null;
       // v141 · "%PDF" al principio: hay que pasar por el lector de PDF, que es
       // asíncrono y se descarga la primera vez que se usa.
       const esPdf=buf[0]===0x25&&buf[1]===0x50&&buf[2]===0x44&&buf[3]===0x46;
@@ -1618,6 +1780,27 @@ function bankSaldoFinal(rows,hi,header,idxDate,idxAmt){
 function bankGuessAccount(isTR){ return bankGuessAccountInfo(isTR).acc; }
 function bankGuessAccountInfo(isTR){
   const A=cfg.accounts||[];
+  // v168 · Si el propio extracto dice de qué banco y de qué cuenta es (el PDF
+  // de Openbank lo dice), solo se proponen cuentas de ESE banco. Sin esto se
+  // proponía la primera cuyo nombre sonara a banco, y el saldo de Openbank iba
+  // a parar a «EVO / Bankinter». Si esa cuenta no está en la app, se propone
+  // crearla con su nombre: «Openbank · Cuenta corriente».
+  const H=isTR?null:_bankHint;
+  if(H){
+    const banco=new RegExp(H.patron||H.banco,'i');
+    // la que ya quedó ligada a ese número de cuenta otra vez
+    const ligada=H.fin4?A.find(a=>a.fin4===H.fin4):null;
+    if(ligada)return {acc:ligada,seguro:true};
+    const del=A.filter(a=>banco.test(a.name||'')&&!(a.fin4&&H.fin4&&a.fin4!==H.fin4));
+    // la de su tipo: «corriente», «remunerada»…
+    const palabra=String(H.tipo||'').toLowerCase().replace(/^cuenta\s*/,'').split(/\s+/)[0]||'';
+    const delTipo=palabra?del.find(a=>String(a.name||'').toLowerCase().indexOf(palabra)>=0):null;
+    if(delTipo)return {acc:delTipo,seguro:true};
+    // o la única de ese banco, si su nombre no dice que sea de otro tipo
+    const OTRO=/corriente|remunerada|ahorro|n[oó]mina|plazo|dep[oó]sito/i;
+    if(del.length===1&&!OTRO.test(del[0].name||''))return {acc:del[0],seguro:true};
+    return {acc:null,seguro:false,nuevo:H.nombre};
+  }
   const re=isTR?/trade|republic/i:/evo|bankinter|banco|caixa|santander|bbva|sabadell|\bing\b|openbank|abanca|unicaja|kutxa|imagin|revolut|n26/i;
   const claro=A.find(a=>re.test(a.name||''));
   if(claro)return {acc:claro,seguro:true};
@@ -1628,24 +1811,43 @@ function bankGuessAccountInfo(isTR){
 // es peor que no ponerlo. Se propone la más probable y decides tú.
 function bankAplicarSaldo(info,isTR){
   if(!info)return false;
-  const A=cfg.accounts||[]; if(!A.length)return false;
+  if(!cfg.accounts)cfg.accounts=[];
+  const A=cfg.accounts;
   const g=bankGuessAccountInfo(isTR);
+  const H=isTR?null:_bankHint;
+  if(!A.length&&!g.nuevo)return false;
   const gi=Math.max(0,A.indexOf(g.acc));
+  // v168 · cuando el extracto es de una cuenta que aún no está en la app, la
+  // última opción es crearla con su nombre
+  const nNuevo=g.nuevo?A.length+1:0;
   const lista=A.map((a,n)=>{
     const e=getBalanceEntries('acc',a.id)[0];
     return '  '+(n+1)+') '+a.name+(e?'  → ahora '+fmt2(e.amount)+'€ a '+fmtDate(e.date):'  → sin saldo registrado');
-  }).join('\n');
-  const r=prompt('El extracto termina con un saldo de '+fmt2(info.saldo)+'€ el '+fmtDate(info.date)+
+  }).join('\n')+(nNuevo?'\n  '+nNuevo+') Crear la cuenta «'+g.nuevo+'»':'');
+  const r=prompt((H?'El extracto de '+H.banco+' ('+String(H.tipo||'cuenta').toLowerCase()+(H.fin4?', acabada en '+H.fin4:'')+') termina':'El extracto termina')+
+    ' con un saldo de '+fmt2(info.saldo)+'€ el '+fmtDate(info.date)+
     (info.orden==='desc'?'\n(el archivo viene del movimiento más reciente al más antiguo)':'')+'.\n\n'+
     (g.seguro
       ? '¿A qué cuenta corresponde? Escribe el número. Deja en blanco para no tocar la liquidez.'
-      : 'NO he podido identificar el banco del extracto, así que no propongo ninguna cuenta.\n'+
-        'Escribe el número de la que sea. Deja en blanco para no tocar la liquidez.')+
-    '\n\n'+lista, g.seguro?String(gi+1):'');
+      : nNuevo
+        ? 'Esa cuenta no está en la app: te propongo crearla (la '+nNuevo+'). Si ya la tienes con otro nombre, escribe su número. '+
+          'Deja en blanco para no tocar la liquidez.'
+        : 'NO he podido identificar el banco del extracto, así que no propongo ninguna cuenta.\n'+
+          'Escribe el número de la que sea. Deja en blanco para no tocar la liquidez.')+
+    '\n\n'+lista, g.seguro?String(gi+1):(nNuevo?String(nNuevo):''));
   if(r==null||!String(r).trim())return false;
   const n=parseInt(String(r).trim(),10);
-  if(!(n>=1&&n<=A.length)){toast('Ese número de cuenta no existe: no he tocado la liquidez.');return false;}
-  const acc=A[n-1];
+  let acc;
+  if(nNuevo&&n===nNuevo){
+    acc={id:'acc_'+Date.now(),name:g.nuevo};
+    if(H&&H.fin4)acc.fin4=H.fin4;
+    A.push(acc);
+  }else{
+    if(!(n>=1&&n<=A.length)){toast('Ese número de cuenta no existe: no he tocado la liquidez.');return false;}
+    acc=A[n-1];
+    // la cuenta de ese banco queda ligada a ese número: el próximo extracto va solo
+    if(H&&H.fin4&&!acc.fin4&&new RegExp(H.patron||H.banco,'i').test(acc.name||'')&&!A.some(a=>a.fin4===H.fin4))acc.fin4=H.fin4;
+  }
   const e0=getBalanceEntries('acc',acc.id)[0];
   if(e0&&e0.date>info.date){
     if(!confirm('En «'+acc.name+'» ya tienes un saldo MÁS RECIENTE: '+fmt2(e0.amount)+'€ a '+fmtDate(e0.date)+'.\n\n'+
@@ -1813,8 +2015,12 @@ function processBankRows(rows){
           '· '+skip+' omitidos por ser traspasos entre tus cuentas o bolsa\n'+
           '· 0 movimientos nuevos\n\n'+
           (fechasOK.length
-            ? 'El archivo se ha leído bien: sencillamente ya lo tenías todo. Para la próxima, pide el extracto desde el '+
-              fmtDate(fechasOK[fechasOK.length-1])+'.'
+            ? (dup
+                ? 'El archivo se ha leído bien: sencillamente ya lo tenías todo. Para la próxima, pide el extracto desde el '+
+                  fmtDate(fechasOK[fechasOK.length-1])+'.'
+                : skip
+                  ? 'El archivo se ha leído bien: lo que trae son traspasos entre tus cuentas, que no son ni ingreso ni gasto.'
+                  : 'El archivo se ha leído bien, pero no trae ningún ingreso ni gasto.')
             : 'No he sabido leer las fechas. Comprueba que la hoja tenga una fila de cabecera con «Fecha», «Descripción» e «Importe».')+
           skipTxt0);
         let tocado=false;
@@ -1997,6 +2203,25 @@ async function extractPdfLines(file){
   }
   return lines;
 }
+// v168 · Los trozos de texto del PDF con su posición en la página (x, y en
+// puntos, la y hacia arriba), para las tablas que no se leen por renglones
+async function extractPdfItems(file){
+  const buf=await file.arrayBuffer();
+  const pdf=await pdfjsLib.getDocument({data:new Uint8Array(buf)}).promise;
+  const out=[];
+  for(let p=1;p<=pdf.numPages;p++){
+    const page=await pdf.getPage(p);
+    const tc=await page.getTextContent();
+    tc.items.forEach(it=>{
+      const t=it.transform||[], s=String(it.str||'').replace(/\u00a0/g,' ').trim();
+      if(!s)return;
+      // el texto girado del margen (los datos del registro mercantil) no es de la tabla
+      if(Math.abs(t[1]||0)>0.01||Math.abs(t[2]||0)>0.01)return;
+      out.push({p,x:t[4],y:t[5],w:it.width||0,h:Math.abs(t[3]||0)||it.height||0,s});
+    });
+  }
+  return out;
+}
 // v158 · Antes, si el mes ya tenía desglose, la nómina se daba por buena y se
 // omitía. Eso impedía justo lo que hacía falta hoy: volver a leer una nómina
 // que se importó con un lector peor. El PDF es la fuente, así que si vuelves a
@@ -2056,9 +2281,16 @@ async function handleNominaPdfs(ev){
   try{ await loadPdfJs(); }
   catch(e){ alert('No se pudo cargar el lector de PDF.\n\nEsta función necesita conexión a internet la primera vez (para cargar pdf.js). Conéctate y vuelve a intentarlo, o pásame el PDF por el chat y lo proceso yo.'); return; }
   const res=[]; let ok=0;
+  const extractos=[];
   for(const f of files){
     try{
       const lines=await extractPdfLines(f);
+      // v168 · Si no es una nómina sino el extracto del banco en PDF (Trade
+      // Republic, Openbank), se importa como extracto en vez de dar error: al
+      // soltar un PDF, lo primero que se ofrece es leerlo como nómina.
+      if(trEsExtracto(lines)||obEsExtracto(lines)){
+        extractos.push(f); res.push('→ '+f.name+': no es una nómina, es un extracto del banco. Se importa como tal.'); continue;
+      }
       const r=parseNominaLines(lines);
       if(!r.ym){res.push('✗ '+f.name+': no se detectó el mes');continue;}
       const st=nominaAddOrEnrich(r.ym,'Nómina '+r.ym,r.liquido,r.nd);
@@ -2066,7 +2298,12 @@ async function handleNominaPdfs(ev){
     }catch(err){ res.push('✗ '+f.name+': error leyendo el PDF'); }
   }
   if(ok>0){ save(); if(typeof renderAll==='function')renderAll(); }
-  alert('Nóminas PDF procesadas:\n\n'+res.join('\n')+'\n\nRevisa la pestaña Impuestos y el detalle de ingresos.');
+  if(res.length>extractos.length)
+    alert('Nóminas PDF procesadas:\n\n'+res.join('\n')+'\n\nRevisa la pestaña Impuestos y el detalle de ingresos.');
+  for(const f of extractos){
+    try{ _bankTR=false; _bankHint=null; processBankRows(await bankFilasPdf(f)); }
+    catch(err){ alert('No pude leer el extracto '+f.name+': '+(err&&err.message||err)); }
+  }
 }
 
 function importNominasHist(){
@@ -16101,7 +16338,7 @@ let COLA=[], OCUPADO=false;
 function buzon(){
   let h='<h1 style="font-size:24px;margin-top:10px">Buzón</h1>'+
     (EN_BLANCO?cita('The curious task of economics is to demonstrate to men how little they really know about what they imagine they can design.','F. A. Hayek','The Fatal Conceit: The Errors of Socialism'):'')+
-    '<p class="pie" style="font-size:15px">Echa aquí lo que te descargues: extractos de Bankinter y Trade Republic, '+
+    '<p class="pie" style="font-size:15px">Echa aquí lo que te descargues: extractos de Bankinter, Trade Republic y Openbank, '+
     'las carteras de DEGIRO y XTB, las operaciones de DEGIRO y tus nóminas. No hace falta decir qué es cada cosa: lo reconoce por dentro. '+
     'Antes de tocar nada te enseña qué va a cambiar, y lo que apliques queda también en la app de siempre.</p>';
   h+='<div class="bloque suelta" id="zona"><label class="btn" style="display:inline-block">Elegir archivos'+
@@ -16162,26 +16399,34 @@ function cuerpo(it){
   const todos=[...C.confirms,...C.alerts];
   const txt=todos.find(x=>/He le[ií]do/.test(x))||todos[0]||'';
   let h='';
-  if(it.tipo==='banco'||it.tipo==='banco_tr'){
+  if(it.tipo==='banco'||it.tipo==='banco_tr'||it.tipo==='banco_ob'){
     const leido=(String(txt).split('\n').find(l=>/He le[ií]do/.test(l))||'');
     if(leido)h+='<p class="pie">'+esc(leido)+'</p>';
     const si=d.ingresos.reduce((s,x)=>s+x[2],0), sg=d.gastos.reduce((s,x)=>s+x[2],0);
     const cats={}; d.gastos.forEach(x=>{cats[x[3]]=(cats[x[3]]||0)+1;});
     const top=Object.entries(cats).sort((a,b)=>b[1]-a[1]).slice(0,4).map(([c,n])=>esc(nombreCat(c))+' '+n).join(', ');
+    const dup=contar(txt,/(\d+) ya registrados/)||contar(txt,/(\d+) ya los ten[ií]as/), om=contar(txt,/(\d+) (?:traspasos|omitidos)/);
+    // v168 · cuáles se han tomado por traspasos entre tus cuentas, para que se vea
+    const omitidos=((/Omitidos como traspaso propio[^\n]*:\n((?: {3}.*(?:\n|$))+)/.exec(txt)||[])[1]||'').split('\n').map(x=>x.trim()).filter(x=>x&&!/^…/.test(x));
     h+='<p class="estado">'+(d.ingresos.length||d.gastos.length
       ?('<b>'+d.ingresos.length+'</b> ingreso(s) por <span class="num">'+eur(si)+'</span> y <b>'+d.gastos.length+'</b> gasto(s) por <span class="num">'+eur(sg)+'</span>'+(top?('<br><span class="pie">'+top+'</span>'):''))
-      :'Nada nuevo: ya tenías todos estos movimientos.')+'</p>';
-    const dup=contar(txt,/(\d+) ya registrados/)||contar(txt,/(\d+) ya los ten[ií]as/), om=contar(txt,/(\d+) (?:traspasos|omitidos)/);
-    if(dup||om)h+='<p class="pie">'+(dup?dup+' ya los tenías':'')+(dup&&om?', ':'')+(om?om+' traspasos entre tus cuentas o a bolsa que no son ni ingreso ni gasto':'')+'.</p>';
+      :(dup||!om?'Nada nuevo: ya tenías todos estos movimientos.':'Ningún ingreso ni gasto nuevo.'))+'</p>';
+    if(dup||om)h+='<p class="pie">'+(dup?dup+(dup===1?' ya lo tenías':' ya los tenías'):'')+(dup&&om?', ':'')+
+      (om?(om===1?'1 traspaso entre tus cuentas o a bolsa, que no es ni ingreso ni gasto':om+' traspasos entre tus cuentas o a bolsa, que no son ni ingreso ni gasto')+
+        (omitidos.length?': '+omitidos.slice(0,3).map(esc).join('; ')+(omitidos.length>3?'…':''):''):'')+'.</p>';
     const viejo=todos.find(x=>/M[AÁ]S RECIENTE/i.test(x));
     if(it.saldo&&it.saldo.info){
-      const S=it.saldo, cuentas=d.cuentas||[];
-      const sel=(it.opc&&it.opc.cuenta!==undefined)?it.opc.cuenta:(S.guess&&S.guess.seguro?cuentas.findIndex(c=>c[0]===S.guess.acc.id):'');
+      const S=it.saldo, cuentas=d.cuentas||[], G=S.guess||{};
+      // v168 · si la cuenta del extracto no está en la app, se puede crear desde aquí
+      const sel=(it.opc&&it.opc.cuenta!==undefined)?it.opc.cuenta:(G.seguro&&G.acc?cuentas.findIndex(c=>c[0]===G.acc.id):(G.nuevo?'nuevo':''));
       h+='<p class="estado">Saldo al final: <b class="num">'+eur(S.info.saldo)+'</b> el '+fecha(S.info.date)+'<br>'+
         '<label>Es de <select data-acc="cuenta">'+
         '<option value=""'+(sel===''?' selected':'')+'>— no tocar la liquidez —</option>'+
         cuentas.map((c,i)=>'<option value="'+i+'"'+(sel===i?' selected':'')+'>'+esc(c[1])+'</option>').join('')+
-        '</select></label>'+(S.guess&&!S.guess.seguro?'<br><span class="neg">No reconozco el banco: elige la cuenta.</span>':'')+
+        (G.nuevo?'<option value="nuevo"'+(sel==='nuevo'?' selected':'')+'>crear «'+esc(G.nuevo)+'»</option>':'')+
+        '</select></label>'+
+        (G.nuevo&&sel==='nuevo'?'<br><span class="pie">No la tienes en la app: se crea al aplicar, con ese nombre.</span>':'')+
+        (S.guess&&!S.guess.seguro&&!G.nuevo?'<br><span class="neg">No reconozco el banco: elige la cuenta.</span>':'')+
         (viejo?('<br><span class="pie">Esa cuenta ya tiene un saldo más reciente ('+esc((viejo.match(/:\s*([\d.,]+€ a [\d\/]+)/)||['',''])[1])+
           '), así que este no se registra: tu liquidez no cambia.</span>'):'')+'</p>';
     }
@@ -16294,7 +16539,7 @@ function enlazarBuzon(){
         if(it.tipo==='copia2'){ if(DB&&!confirm('Esto sustituye lo que hay en esta versión. ¿Seguir?'))return; DB=it.json; guardar(); ir('hoy'); }
         else restaurarCopia(it.json);
       };
-      else if(acc==='cuenta')c.onchange=()=>{it.opc.cuenta=c.value===''?'':+c.value;};
+      else if(acc==='cuenta')c.onchange=async()=>{it.opc.cuenta=c.value===''?'':(c.value==='nuevo'?'nuevo':+c.value); await simular(it); pintar();};
       else if(acc==='broker')c.onchange=async()=>{it.opc.brokerSel=c.value; await simular(it); pintar();};
       else if(acc==='nuevas'||acc==='ops'||acc==='flujos')c.onchange=async()=>{it.opc[acc]=c.checked; await simular(it); pintar();};
     });
@@ -16456,7 +16701,13 @@ async function detectar(file){
       if(r&&r.ym&&r.nd&&r.nd.devengos&&r.nd.devengos.length){it.tipo='nomina';it.nomina=r;return it;}
       const F=E('trExtractoFilas')(it.lines);
       if(F&&F.length>1){it.tipo='banco_tr';it.filas=F;return it;}
-      it.tipo='desconocido'; it.porque='Es un PDF, pero no es ni una nómina ni un extracto de Trade Republic.'; return it;
+      // v168 · el extracto de Openbank: la tabla se lee con la posición de cada texto
+      if(E('obEsExtracto')(it.lines)){
+        const O=E('obExtractoFilas')(await E('extractPdfItems')(file));
+        if(O&&O.filas.length>1){it.tipo='banco_ob';it.filas=O.filas;it.ob=O.cuenta;return it;}
+        it.tipo='desconocido'; it.porque='Es un extracto de Openbank, pero no he encontrado ningún movimiento dentro.'; return it;
+      }
+      it.tipo='desconocido'; it.porque='Es un PDF, pero no es ni una nómina ni un extracto de Trade Republic o de Openbank.'; return it;
     }
     legado();
     if(pk||ole){
@@ -16484,6 +16735,10 @@ async function ejecutar(it){
     E('processBankRows')(F);
   } else if(it.tipo==='banco_tr'){
     E('_bankTR=true'); E('processBankRows')(it.filas);
+  } else if(it.tipo==='banco_ob'){
+    // v168 · el motor sabe así de qué cuenta es y propone esa, o crearla
+    LEG.tmp=it.ob; E('_bankTR=false; _bankHint=__LEG.tmp;');
+    try{ E('processBankRows')(it.filas); }finally{ E('_bankHint=null;'); }
   } else if(it.tipo==='cartera'){
     E('brokerFile')(it.buf,it.nombre,it.file.lastModified);
     const P=E('_dgPending'); if(!P||!P.plan)throw new Error('No he podido leer la cartera.');
@@ -16540,6 +16795,7 @@ async function simular(it){
   // en la simulación el saldo va a la cuenta elegida, o a la propuesta si el banco se reconoce
   LEG.respPrompt=(s,d)=>{
     const o=it.opc||{};
+    if(o.cuenta==='nuevo'){ const m=/(\d+)\) Crear la cuenta/.exec(String(s||'')); return m?m[1]:''; }
     if(o.cuenta!==undefined)return o.cuenta===''?'':String(o.cuenta+1);
     return d||'';
   };
@@ -16585,7 +16841,9 @@ async function aplicar(it,enLote){
   const cruda=enLote?fotoCruda():guardarCopiaDeshacer(describir(it));
   if(!cruda)return false;
   LEG.cap={alerts:[],confirms:[],prompts:[]}; LEG.respConfirm=responder;
-  LEG.respPrompt=(s,d)=>{const o=it.opc||{}; if(o.cuenta!==undefined)return o.cuenta===''?'':String(o.cuenta+1); return d||'';};
+  LEG.respPrompt=(s,d)=>{const o=it.opc||{};
+    if(o.cuenta==='nuevo'){ const m=/(\d+)\) Crear la cuenta/.exec(String(s||'')); return m?m[1]:''; }
+    if(o.cuenta!==undefined)return o.cuenta===''?'':String(o.cuenta+1); return d||'';};
   LEG.modo='real';
   try{ await ejecutar(it); }
   catch(e){ restaurar(cruda); throw e; }
@@ -16612,7 +16870,8 @@ function deshacer(){
   restaurar(u.datos); ALM.removeItem(UNDO_KEY); return true;
 }
 function describir(it){
-  return ({banco:'Extracto del banco',banco_tr:'Extracto de Trade Republic',cartera:'Cartera de '+(it.broker||'bróker'),
+  return ({banco:'Extracto del banco',banco_tr:'Extracto de Trade Republic',
+    banco_ob:'Extracto de Openbank'+(it.ob&&it.ob.tipo?' · '+String(it.ob.tipo).toLowerCase():''),cartera:'Cartera de '+(it.broker||'bróker'),
     dgtx:'Operaciones de DEGIRO',nomina:'Nómina'+(it.nomina?(' de '+mesLargo(it.nomina.ym)):'')}[it.tipo]||it.nombre);
 }
 
